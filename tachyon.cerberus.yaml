@@ -1,0 +1,30 @@
+kind: cerberus-project/v1
+owner: tachyon
+namespace: local
+project:
+    id: tachyon
+    name: Tachyon
+resources:
+    - id: tachyon
+      name: Tachyon (Menu Bar)
+      type: process
+      project: tachyon
+      connector: local
+      config:
+        build:
+            - bash
+            - build.sh
+        command:
+            - /Users/chrispian/dev/hollis-labs/apps/tachyon/dist/Tachyon.app/Contents/MacOS/Tachyon
+        dir: /Users/chrispian/dev/hollis-labs/apps/tachyon
+        mode: os_service
+        run_from: workspace
+        supervisor: launchd
+      tags:
+        - gui
+        - swift
+        - macos
+        - menubar
+        - launchd
+        - tachyon
+        - v2
