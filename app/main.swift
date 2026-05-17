@@ -599,10 +599,13 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         var inputs: [String: String] = [:]
         for field in describe.inputs {
-            if let button = controls[field.name] as? NSButton {
-                inputs[field.name] = button.state == .on ? "true" : "false"
-            } else if let popup = controls[field.name] as? NSPopUpButton {
+            // NSPopUpButton subclasses NSButton — it MUST be matched first,
+            // or a runner dropdown is mistaken for a checkbox and sends
+            // its boolean state ("true"/"false") as the runner value.
+            if let popup = controls[field.name] as? NSPopUpButton {
                 inputs[field.name] = popup.titleOfSelectedItem ?? ""
+            } else if let button = controls[field.name] as? NSButton {
+                inputs[field.name] = button.state == .on ? "true" : "false"
             } else if let textField = controls[field.name] as? NSTextField {
                 inputs[field.name] = textField.stringValue
             }
