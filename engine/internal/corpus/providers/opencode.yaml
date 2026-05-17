@@ -1,0 +1,16 @@
+# Runtime-binding contract — opencode runner.
+#
+# opencode is the interactive OpenCode CLI subprocess runner.
+#
+# `id` is the top-level field the file-backed registrar keys the
+# RegistryObjectRef name on — it MUST equal the `runner` token.
+id: opencode
+meta:
+  ref:
+    kind: runtime-binding
+    name: opencode
+  schema_version: v1alpha1
+  interface: runtime-binding/v1
+binding:
+  provider: opencode
+  runtime_kind: subprocess

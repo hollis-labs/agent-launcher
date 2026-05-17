@@ -1,0 +1,18 @@
+# Runtime-binding contract — claude-tui runner.
+#
+# claude-tui is the named alias for the interactive Claude TUI runner;
+# it resolves to the same (claude, pty) pair as claude-pty. Kept as a
+# distinct token so the `-tui` launch nomenclature stays addressable.
+#
+# `id` is the top-level field the file-backed registrar keys the
+# RegistryObjectRef name on — it MUST equal the `runner` token.
+id: claude-tui
+meta:
+  ref:
+    kind: runtime-binding
+    name: claude-tui
+  schema_version: v1alpha1
+  interface: runtime-binding/v1
+binding:
+  provider: claude
+  runtime_kind: pty

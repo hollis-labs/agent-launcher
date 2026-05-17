@@ -1,0 +1,16 @@
+# Runtime-binding contract — codex-cli runner.
+#
+# codex-cli is the interactive Codex CLI subprocess runner.
+#
+# `id` is the top-level field the file-backed registrar keys the
+# RegistryObjectRef name on — it MUST equal the `runner` token.
+id: codex-cli
+meta:
+  ref:
+    kind: runtime-binding
+    name: codex-cli
+  schema_version: v1alpha1
+  interface: runtime-binding/v1
+binding:
+  provider: codex
+  runtime_kind: subprocess

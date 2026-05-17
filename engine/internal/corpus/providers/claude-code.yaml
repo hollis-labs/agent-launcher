@@ -1,0 +1,23 @@
+# Runtime-binding contract — claude-code runner.
+#
+# The `runner` LaunchSpec input is an open token; this file is the
+# directory-registry contract that resolves the token to a concrete
+# (provider, RuntimeKind) pair. The engine ingests internal/corpus/
+# providers/ with the go-agent-launch file-backed registrar (providers/
+# maps to the runtime-binding kind) and resolves the bag's `runner`
+# input through agentlaunch.ResolveRuntimeBinding.
+#
+# claude-code is the interactive Claude CLI subprocess runner.
+#
+# `id` is the top-level field the file-backed registrar keys the
+# RegistryObjectRef name on — it MUST equal the `runner` token.
+id: claude-code
+meta:
+  ref:
+    kind: runtime-binding
+    name: claude-code
+  schema_version: v1alpha1
+  interface: runtime-binding/v1
+binding:
+  provider: claude
+  runtime_kind: subprocess
