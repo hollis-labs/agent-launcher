@@ -160,10 +160,12 @@ vars:
 # the blueprint identity. Provider here is a placeholder — the live
 # launcher overlays the resolved `runner` input onto this binding before
 # spawn (provider-as-input feeds the runtime-binding, not identity).
+# runtime_kind is an interactive shape (D-T2): Tachyon launches no
+# streaming/non-interactive runner.
 # ---------------------------------------------------------------------
 runtime:
   provider: claude-code
-  runtime_kind: streaming-stdio
+  runtime_kind: subprocess
 
 # ---------------------------------------------------------------------
 # Merge-tag template body — the boot prompt. This is the folded
