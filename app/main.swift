@@ -21,42 +21,45 @@ let hotkeyHandler: EventHandlerUPP = { _, _, _ -> OSStatus in
     return noErr
 }
 
-struct InputOption: Codable {
-    let value: String
-    let label: String
-}
-
 struct InputField: Codable {
     let name: String
     let type: String
     let required: Bool
-    let description: String?
     let `default`: JSONValue?
-    let options: [InputOption]?
+    let description: String?
 }
 
 struct SpecSummary: Codable {
     let id: String
-    let display_name: String
+    let name: String
     let project: String?
     let role: String?
-    let launch: String?
-    let provider: String?
-    let source_kind: String
-    let description: String?
+    let summary: String?
+    let facets: [String: String]?
 }
 
 struct ListResponse: Codable {
     let specs: [SpecSummary]
-    let mode: String
-    let root: String
-    let warnings: [String]?
 }
 
 struct DescribeResponse: Codable {
-    let spec: SpecSummary
+    let id: String
+    let name: String
     let inputs: [InputField]
-    let warnings: [String]?
+    let runners: [String]
+}
+
+struct LaunchResult: Codable {
+    let status: String
+    // status == "ready"
+    let binary: String?
+    let args: [String]?
+    let env: [String: String]?
+    let workdir: String?
+    // status == "var_error"
+    let `var`: String?
+    let message: String?
+    let options: [String]?
 }
 
 enum JSONValue: Codable {
@@ -113,70 +116,199 @@ enum JSONValue: Codable {
     }
 }
 
-enum EngineError: Error {
+enum EngineError: LocalizedError {
     case missingEngine
     case invalidOutput(String)
+    case timeout(TimeInterval)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingEngine:
+            return "tachyon-engine not found in app bundle — rebuild with build.sh"
+        case .invalidOutput(let detail):
+            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty
+                ? "tachyon-engine produced output that could not be parsed"
+                : "tachyon-engine produced unparseable output: \(trimmed)"
+        case .timeout(let seconds):
+            return "tachyon-engine did not respond within \(Int(seconds))s — the call was aborted"
+        }
+    }
+}
+
+/// Outcome of a raw engine invocation: decoded stdout plus raw process facts
+/// so callers can distinguish exit 0 / 2 (var_error) / other.
+struct EngineRun {
+    let exitCode: Int32
+    let stdout: String
+    let stderr: String
 }
 
 final class EngineClient {
+    /// Default hang guard for engine subprocess calls.
+    static let timeout: TimeInterval = 10
+
     func listSpecs() throws -> ListResponse {
-        try runJSON(["list"], type: ListResponse.self)
+        try decode(run(["list"]), as: ListResponse.self, requireExitZero: true)
     }
 
     func describe(specID: String) throws -> DescribeResponse {
-        try runJSON(["describe", specID], type: DescribeResponse.self)
+        try decode(run(["describe", "--spec", specID]), as: DescribeResponse.self, requireExitZero: true)
     }
 
-    func launchCommand(specID: String, inputs: [String: String]) throws -> String {
-        var parts = [shellQuote(try enginePath()), "launch", shellQuote(specID)]
+    /// Runs `launch` and decodes a LaunchResult. Exit code 2 is the var_error
+    /// path — not a hard failure — so it is allowed here; the caller branches
+    /// on `status`. Any other non-zero exit is a fatal error.
+    func launch(specID: String, inputs: [String: String], onErrorChoice: String?) throws -> LaunchResult {
+        var args = ["launch", "--spec", specID]
         for key in inputs.keys.sorted() {
             guard let value = inputs[key], !value.isEmpty else { continue }
-            parts.append("--input")
-            parts.append(shellQuote("\(key)=\(value)"))
+            args.append("--input")
+            args.append("\(key)=\(value)")
         }
-        return parts.joined(separator: " ")
+        if let choice = onErrorChoice {
+            args.append("--on-error-choice")
+            args.append(choice)
+        }
+        let result = try run(args)
+        // exit 0 = ready, exit 2 = var_error — both carry decodable JSON.
+        if result.exitCode != 0 && result.exitCode != 2 {
+            throw engineFailure(result)
+        }
+        return try decode(result, as: LaunchResult.self, requireExitZero: false)
     }
 
-    private func runJSON<T: Decodable>(_ args: [String], type: T.Type) throws -> T {
-        let process = Process()
-        let out = Pipe()
-        let err = Pipe()
-        process.executableURL = URL(fileURLWithPath: try enginePath())
-        process.arguments = args
-        process.standardOutput = out
-        process.standardError = err
-        try process.run()
-        process.waitUntilExit()
+    // MARK: - Decoding helpers
 
-        let stdout = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
-        guard process.terminationStatus == 0 else {
-            throw NSError(domain: "TachyonEngine", code: Int(process.terminationStatus), userInfo: [
-                NSLocalizedDescriptionKey: stderr.isEmpty ? "tachyon-engine failed" : stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            ])
+    private func decode<T: Decodable>(_ result: EngineRun, as type: T.Type, requireExitZero: Bool) throws -> T {
+        if requireExitZero && result.exitCode != 0 {
+            throw engineFailure(result)
         }
-
-        guard let data = stdout.data(using: .utf8) else {
+        guard let data = result.stdout.data(using: .utf8) else {
             throw EngineError.invalidOutput("tachyon-engine produced non-UTF8 output")
         }
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            throw EngineError.invalidOutput(stdout)
+            throw EngineError.invalidOutput(result.stdout)
         }
     }
 
+    private func engineFailure(_ result: EngineRun) -> NSError {
+        let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        return NSError(domain: "TachyonEngine", code: Int(result.exitCode), userInfo: [
+            NSLocalizedDescriptionKey: stderr.isEmpty ? "tachyon-engine failed (exit \(result.exitCode))" : stderr
+        ])
+    }
+
+    // MARK: - Subprocess with hang guard
+
+    /// Spawns the engine, draining stdout/stderr on background queues so a
+    /// large payload cannot deadlock the pipe buffer, and enforcing a timeout
+    /// so a hung engine can never freeze the UI indefinitely.
+    private func run(_ args: [String], timeout: TimeInterval = EngineClient.timeout) throws -> EngineRun {
+        let path = try enginePath()
+        let process = Process()
+        let out = Pipe()
+        let err = Pipe()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = args
+        process.standardOutput = out
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = err
+
+        // Drain both pipes concurrently while the process runs.
+        var outData = Data()
+        var errData = Data()
+        let lock = NSLock()
+        let group = DispatchGroup()
+        let drain: (FileHandle, @escaping (Data) -> Void) -> Void = { handle, store in
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let data = handle.readDataToEndOfFile()
+                store(data)
+                group.leave()
+            }
+        }
+        drain(out.fileHandleForReading) { data in lock.lock(); outData = data; lock.unlock() }
+        drain(err.fileHandleForReading) { data in lock.lock(); errData = data; lock.unlock() }
+
+        try process.run()
+
+        let deadline = DispatchTime.now() + timeout
+        if process.isRunning {
+            // Wait for exit off the calling thread so the timeout is enforced.
+            let exited = DispatchSemaphore(value: 0)
+            DispatchQueue.global(qos: .userInitiated).async {
+                process.waitUntilExit()
+                exited.signal()
+            }
+            if exited.wait(timeout: deadline) == .timedOut {
+                process.terminate() // SIGTERM
+                // Give it a moment to die, then SIGKILL if still alive.
+                if exited.wait(timeout: .now() + 2) == .timedOut {
+                    kill(process.processIdentifier, SIGKILL)
+                    _ = exited.wait(timeout: .now() + 2)
+                }
+                _ = group.wait(timeout: .now() + 2)
+                throw EngineError.timeout(timeout)
+            }
+        }
+
+        // Process exited within budget — let pipe drains finish.
+        _ = group.wait(timeout: .now() + 2)
+        lock.lock()
+        let stdout = String(data: outData, encoding: .utf8) ?? ""
+        let stderr = String(data: errData, encoding: .utf8) ?? ""
+        lock.unlock()
+        return EngineRun(exitCode: process.terminationStatus, stdout: stdout, stderr: stderr)
+    }
+
     private func enginePath() throws -> String {
+        let fm = FileManager.default
+
+        // (a) Bundle resourceURL/tachyon-engine
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("tachyon-engine").path,
-           FileManager.default.isExecutableFile(atPath: bundled) {
+           fm.isExecutableFile(atPath: bundled) {
             return bundled
         }
+        // (b) Resolved relative to the executable: ../Resources/tachyon-engine
+        if let exe = Bundle.main.executableURL {
+            let relative = exe.deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources")
+                .appendingPathComponent("tachyon-engine")
+                .path
+            if fm.isExecutableFile(atPath: relative) {
+                return relative
+            }
+        }
+        // (c) Dev fallback
         let fallback = NSString(string: "~/dev/hollis-labs/apps/tachyon/dist/Tachyon.app/Contents/Resources/tachyon-engine").expandingTildeInPath
-        if FileManager.default.isExecutableFile(atPath: fallback) {
+        if fm.isExecutableFile(atPath: fallback) {
             return fallback
         }
         throw EngineError.missingEngine
+    }
+
+    /// Builds a shell command string for iTerm from a ready LaunchResult.
+    /// `cd <workdir> && KEY=VAL ... <binary> <args...>`, every component quoted.
+    static func iTermCommand(for result: LaunchResult) -> String? {
+        guard let binary = result.binary else { return nil }
+        var parts: [String] = []
+        if let workdir = result.workdir, !workdir.isEmpty {
+            parts.append("cd \(shellQuote(workdir)) &&")
+        }
+        if let env = result.env {
+            for key in env.keys.sorted() {
+                parts.append("\(key)=\(shellQuote(env[key] ?? ""))")
+            }
+        }
+        parts.append(shellQuote(binary))
+        for arg in result.args ?? [] {
+            parts.append(shellQuote(arg))
+        }
+        return parts.joined(separator: " ")
     }
 }
 
@@ -242,6 +374,7 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     var filteredSpecs: [SpecSummary] = []
     var selectedSpecID: String?
     var currentDescribe: DescribeResponse?
+    var currentSpec: SpecSummary?
 
     var window: LauncherWindow!
     var tableView: NSTableView!
@@ -366,16 +499,14 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             allSpecs = response.specs
             populateFilters()
             applyFilters()
-            if let warning = response.warnings?.first {
-                updateStatus(warning)
-            } else {
-                updateStatus("Loaded \(allSpecs.count) spec(s) from \(response.root)")
-            }
+            updateStatus("Loaded \(allSpecs.count) spec(s)")
         } catch {
             allSpecs = []
             filteredSpecs = []
             tableView.reloadData()
-            rebuildForm(nil)
+            currentDescribe = nil
+            currentSpec = nil
+            rebuildForm(nil, spec: nil)
             updateStatus(error.localizedDescription)
         }
     }
@@ -402,7 +533,9 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         if filteredSpecs.isEmpty {
             selectedSpecID = nil
-            rebuildForm(nil)
+            currentDescribe = nil
+            currentSpec = nil
+            rebuildForm(nil, spec: nil)
             updateStatus("No specs match the current filters")
             return
         }
@@ -414,14 +547,15 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     func loadDescribe(for spec: SpecSummary) {
         selectedSpecID = spec.id
+        currentSpec = spec
         do {
             let describe = try engine.describe(specID: spec.id)
             currentDescribe = describe
-            rebuildForm(describe)
-            updateStatus("\(describe.spec.display_name) · \(describe.spec.project ?? "no project") · \(describe.spec.role ?? "no role")")
+            rebuildForm(describe, spec: spec)
+            updateStatus("\(describe.name) · \(spec.project ?? "no project") · \(spec.role ?? "no role")")
         } catch {
             currentDescribe = nil
-            rebuildForm(nil)
+            rebuildForm(nil, spec: spec)
             updateStatus(error.localizedDescription)
         }
     }
@@ -439,7 +573,7 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let spec = filteredSpecs[row]
         let project = spec.project ?? "no-project"
         let role = spec.role ?? "no-role"
-        field.stringValue = "\(spec.display_name)  [\(project) / \(role)]"
+        field.stringValue = "\(spec.name)  [\(project) / \(role)]"
         return field
     }
 
@@ -453,6 +587,10 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         loadDescribe(for: filteredSpecs[row])
     }
 
+    /// Hard cap on var_error re-invocations so a misbehaving spec/engine can
+    /// never spin the launch loop forever.
+    static let maxLaunchRetries = 4
+
     @objc func launchPressed() {
         guard let describe = currentDescribe else {
             updateStatus("No spec selected")
@@ -464,26 +602,79 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             if let button = controls[field.name] as? NSButton {
                 inputs[field.name] = button.state == .on ? "true" : "false"
             } else if let popup = controls[field.name] as? NSPopUpButton {
-                if let selected = popup.selectedItem?.representedObject as? String {
-                    inputs[field.name] = selected
-                } else {
-                    inputs[field.name] = popup.titleOfSelectedItem ?? ""
-                }
+                inputs[field.name] = popup.titleOfSelectedItem ?? ""
             } else if let textField = controls[field.name] as? NSTextField {
                 inputs[field.name] = textField.stringValue
             }
         }
 
+        runLaunch(specID: describe.id, inputs: inputs, onErrorChoice: nil, attempt: 0)
+    }
+
+    /// Invokes `tachyon-engine launch` and reacts to the emitted plan.
+    /// - `status: ready`  → build the iTerm command and open it.
+    /// - `status: var_error` → prompt retry / proceed_cached / cancel, then
+    ///   re-invoke with `--on-error-choice` (bounded by `maxLaunchRetries`).
+    private func runLaunch(specID: String, inputs: [String: String], onErrorChoice: String?, attempt: Int) {
+        let result: LaunchResult
         do {
-            let command = try engine.launchCommand(specID: describe.spec.id, inputs: inputs)
-            openITerm(command)
-            hide()
+            result = try engine.launch(specID: specID, inputs: inputs, onErrorChoice: onErrorChoice)
         } catch {
             updateStatus(error.localizedDescription)
+            return
+        }
+
+        switch result.status {
+        case "ready":
+            guard let command = EngineClient.iTermCommand(for: result) else {
+                updateStatus("Engine returned a ready plan with no binary")
+                return
+            }
+            openITerm(command)
+            hide()
+
+        case "var_error":
+            if attempt >= LauncherWindowController.maxLaunchRetries {
+                updateStatus("Launch aborted — too many unresolved-variable retries")
+                return
+            }
+            let message = result.message ?? "An input variable could not be resolved."
+            let options = (result.options?.isEmpty == false) ? result.options! : ["retry", "proceed_cached", "cancel"]
+
+            let alert = NSAlert()
+            alert.messageText = "Unresolved input: \(result.var ?? "?")"
+            alert.informativeText = message
+            alert.alertStyle = .warning
+            for option in options {
+                alert.addButton(withTitle: optionTitle(option))
+            }
+            let response = alert.runModal()
+            let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+            guard index >= 0, index < options.count else { return }
+            let choice = options[index]
+
+            switch choice {
+            case "retry", "proceed_cached":
+                runLaunch(specID: specID, inputs: inputs, onErrorChoice: choice, attempt: attempt + 1)
+            default: // cancel or anything else
+                updateStatus("Launch cancelled")
+            }
+
+        default:
+            updateStatus("Engine returned an unexpected status: \(result.status)")
         }
     }
 
-    func rebuildForm(_ describe: DescribeResponse?) {
+    private func optionTitle(_ option: String) -> String {
+        switch option {
+        case "retry": return "Retry"
+        case "proceed_cached": return "Proceed with Cached"
+        case "cancel": return "Cancel"
+        default: return option
+        }
+    }
+
+    func rebuildForm(_ describe: DescribeResponse?, spec: SpecSummary?) {
         controls = [:]
         formStack.arrangedSubviews.forEach {
             formStack.removeArrangedSubview($0)
@@ -496,14 +687,11 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             return
         }
 
-        formStack.addArrangedSubview(formTitle(describe.spec.display_name))
-        let meta = "\(describe.spec.project ?? "no project") · \(describe.spec.role ?? "no role") · \(describe.spec.source_kind)"
+        formStack.addArrangedSubview(formTitle(describe.name))
+        let meta = "\(spec?.project ?? "no project") · \(spec?.role ?? "no role")"
         formStack.addArrangedSubview(formBody(meta))
-        if let description = describe.spec.description, !description.isEmpty {
-            formStack.addArrangedSubview(formBody(description))
-        }
-        if let warnings = describe.warnings, !warnings.isEmpty {
-            formStack.addArrangedSubview(formBody(warnings.joined(separator: "\n")))
+        if let summary = spec?.summary, !summary.isEmpty {
+            formStack.addArrangedSubview(formBody(summary))
         }
 
         if describe.inputs.isEmpty {
@@ -522,27 +710,24 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
                 row.addArrangedSubview(formHint(description))
             }
 
-            switch field.type {
-            case "bool":
+            if field.name == "runner" {
+                // The runner input chooses among the engine-advertised runners.
+                let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 28), pullsDown: false)
+                configurePopup(popup)
+                popup.addItems(withTitles: describe.runners)
+                if let preset = field.default?.stringValue,
+                   describe.runners.contains(preset) {
+                    popup.selectItem(withTitle: preset)
+                }
+                controls[field.name] = popup
+                row.addArrangedSubview(popup)
+            } else if field.type == "bool" {
                 let button = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
                 button.state = field.default?.boolValue == true ? .on : .off
                 button.contentTintColor = ink
                 controls[field.name] = button
                 row.addArrangedSubview(button)
-            case "enum":
-                let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 28), pullsDown: false)
-                configurePopup(popup)
-                let options = field.options ?? []
-                popup.addItems(withTitles: options.map(\.label))
-                for (index, option) in options.enumerated() {
-                    popup.item(at: index)?.representedObject = option.value
-                    if option.value == field.default?.stringValue {
-                        popup.selectItem(at: index)
-                    }
-                }
-                controls[field.name] = popup
-                row.addArrangedSubview(popup)
-            default:
+            } else {
                 let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 28))
                 input.stringValue = field.default?.stringValue ?? ""
                 input.isBordered = true
