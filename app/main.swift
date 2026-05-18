@@ -571,9 +571,7 @@ final class LauncherWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         field.backgroundColor = .clear
         field.lineBreakMode = .byTruncatingTail
         let spec = filteredSpecs[row]
-        let project = spec.project ?? "no-project"
-        let role = spec.role ?? "no-role"
-        field.stringValue = "\(spec.name)  [\(project) / \(role)]"
+        field.stringValue = spec.name
         return field
     }
 
