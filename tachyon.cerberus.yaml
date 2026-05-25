@@ -2,29 +2,33 @@ kind: cerberus-project/v1
 owner: tachyon
 namespace: local
 project:
-    id: tachyon
-    name: Tachyon
+  id: tachyon
+  name: Tachyon
 resources:
-    - id: tachyon
-      name: Tachyon (Menu Bar)
-      type: process
-      project: tachyon
-      connector: local
-      config:
-        build:
+  - id: tachyon
+    name: Tachyon (Menu Bar)
+    type: process
+    project: tachyon
+    connector: local
+    config:
+      build_strategy:
+        kind: legacy_command
+        rules:
+          command:
             - bash
             - build.sh
-        command:
-            - /Users/chrispian/dev/hollis-labs/apps/tachyon/dist/Tachyon.app/Contents/MacOS/Tachyon
-        dir: /Users/chrispian/dev/hollis-labs/apps/tachyon
-        mode: os_service
-        run_from: workspace
-        supervisor: launchd
-      tags:
-        - gui
-        - swift
-        - macos
-        - menubar
-        - launchd
-        - tachyon
-        - v2
+      command:
+        - /Users/chrispian/dev/hollis-labs/apps/tachyon/dist/Tachyon.app/Contents/MacOS/Tachyon
+      dir: /Users/chrispian/dev/hollis-labs/apps/tachyon
+      mode: os_service
+      run_from: workspace
+      supervisor: launchd
+    tags:
+      - gui
+      - swift
+      - macos
+      - menubar
+      - launchd
+      - tachyon
+      - v2
+registry_urn: msg://agent/agent-mux/prj_azrdbvc75n
