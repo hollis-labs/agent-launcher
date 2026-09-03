@@ -18,8 +18,8 @@ resources:
             - bash
             - build.sh
       command:
-        - /Users/chrispian/dev/hollis-labs/apps/tachyon/dist/Tachyon.app/Contents/MacOS/Tachyon
-      dir: /Users/chrispian/dev/hollis-labs/apps/tachyon
+        - /Users/chrispian/dev/projects/tachyon/dist/Tachyon.app/Contents/MacOS/Tachyon
+      dir: /Users/chrispian/dev/projects/tachyon
       mode: os_service
       run_from: workspace
       supervisor: launchd
