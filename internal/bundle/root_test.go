@@ -7,7 +7,34 @@ import (
 	"testing"
 
 	"github.com/hollis-labs/tachyon/internal/bundle"
+	"github.com/hollis-labs/tachyon/internal/state"
 )
+
+// TestDefaultRootStoreUnchanged proves internal/state's convergence did not
+// relocate the bundle-root store: DefaultRootStore must still resolve to
+// exactly the path this package hardcoded before internal/state existed --
+// <os.UserConfigDir()>/tachyon/bundle.json (lowercase "tachyon", predating
+// and preserved through this change) -- computed here the old way, by hand,
+// and compared against what DefaultRootStore returns today. A silent
+// relocation here would point an existing user's editor at nothing, having
+// lost their chosen bundle root.
+func TestDefaultRootStoreUnchanged(t *testing.T) {
+	t.Setenv(state.DirEnv, "")
+
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("no user config dir on this machine: %v", err)
+	}
+	want := filepath.Join(dir, "tachyon", "bundle.json")
+
+	got, err := bundle.DefaultRootStore()
+	if err != nil {
+		t.Fatalf("DefaultRootStore: %v", err)
+	}
+	if got.Path != want {
+		t.Fatalf("DefaultRootStore().Path = %q; want the pre-internal/state path %q", got.Path, want)
+	}
+}
 
 func TestRootStoreRoundTrip(t *testing.T) {
 	store := bundle.RootStore{Path: filepath.Join(t.TempDir(), "settings", "bundle.json")}

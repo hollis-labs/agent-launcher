@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/hollis-labs/tachyon/internal/state"
 )
 
 // DefaultRootPath is the bundle Tachyon opens when the user has not chosen
@@ -36,8 +38,17 @@ type rootSettings struct {
 }
 
 // DefaultRootStore is the store under the user's config directory.
+//
+// This deliberately builds its own "tachyon" (lowercase) directory name
+// under [state.Dir] rather than nesting inside [state.Root] ("Tachyon",
+// capitalized): that casing mismatch predates this package's convergence
+// onto internal/state and is preserved here byte-for-byte so an existing
+// user's bundle.json is not silently relocated by this change. [state.Dir]
+// is still the single place the per-user config directory itself is
+// located, so overriding it moves this path too, in lockstep with
+// [state.Root] and everything built on it.
 func DefaultRootStore() (RootStore, error) {
-	dir, err := os.UserConfigDir()
+	dir, err := state.Dir()
 	if err != nil {
 		return RootStore{}, fmt.Errorf("bundle: locating config dir: %w", err)
 	}

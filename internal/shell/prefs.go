@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/hollis-labs/tachyon/internal/state"
 )
 
 // DefaultHotkey is the accelerator the shell falls back to.
@@ -144,18 +146,18 @@ type Store struct {
 	prefs Prefs
 }
 
-// DefaultPrefsPath is where the shell keeps its preferences.
-//
-// os.UserConfigDir is ~/Library/Application Support on macOS, which is where a
+// DefaultPrefsPath is where the shell keeps its preferences:
+// internal/state's state root ([state.Root]) plus "shell.json". On macOS
+// that root resolves under ~/Library/Application Support, which is where a
 // GUI app's own state belongs. Note this is deliberately NOT inside the
 // agent-setup bundle: the bundle is content under git, and shell preferences
 // are neither.
 func DefaultPrefsPath() (string, error) {
-	dir, err := os.UserConfigDir()
+	root, err := state.Root()
 	if err != nil {
-		return "", fmt.Errorf("locating user config dir: %w", err)
+		return "", fmt.Errorf("locating state root: %w", err)
 	}
-	return filepath.Join(dir, "Tachyon", "shell.json"), nil
+	return filepath.Join(root, "shell.json"), nil
 }
 
 // NewStore loads preferences from path, falling back to defaults when the file

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hollis-labs/tachyon/internal/compose"
+	"github.com/hollis-labs/tachyon/internal/state"
 )
 
 // buildCase is one table-driven Build test: a Composition and the exact argv
@@ -20,18 +21,18 @@ type buildCase struct {
 }
 
 // tachyonBootRoot is the boot root every case below uses: a value under
-// Tachyon's own state directory, computed the same way
-// internal/shell.DefaultPrefsPath and internal/bundle.DefaultRootStore
-// already place Tachyon's own files (os.UserConfigDir()'s "Tachyon" tree) —
-// never Cairn's own default of dev/agent-os/runtime/boot under $HOME. See
+// Tachyon's own state directory, computed by internal/state — the single
+// definition internal/shell.DefaultPrefsPath and
+// internal/bundle.DefaultRootStore also build their own paths from — never
+// Cairn's own default of dev/agent-os/runtime/boot under $HOME. See
 // TestBootRootNeverImplicit, which is the test this value exists to feed.
 func tachyonBootRoot(t *testing.T) string {
 	t.Helper()
-	dir, err := os.UserConfigDir()
+	root, err := state.BootRoot()
 	if err != nil {
 		t.Skipf("no user config dir on this machine: %v", err)
 	}
-	return filepath.Join(dir, "Tachyon", "boot")
+	return root
 }
 
 // buildCases is the single canonical set of compositions exercised by both
@@ -229,12 +230,14 @@ func TestBuild(t *testing.T) {
 // checks in full — rather than a hand-picked subset, so this guard cannot
 // silently stop covering a shape TestBuild was extended to cover.
 func TestBootRootNeverImplicit(t *testing.T) {
-	stateDir, err := os.UserConfigDir()
+	tachyonStateDir, err := state.Root()
 	if err != nil {
 		t.Skipf("no user config dir on this machine: %v", err)
 	}
-	tachyonStateDir := filepath.Join(stateDir, "Tachyon")
-	bootRoot := filepath.Join(tachyonStateDir, "boot")
+	bootRoot, err := state.BootRoot()
+	if err != nil {
+		t.Skipf("no user config dir on this machine: %v", err)
+	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {

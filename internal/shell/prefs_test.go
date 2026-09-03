@@ -4,7 +4,35 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/hollis-labs/tachyon/internal/state"
 )
+
+// TestDefaultPrefsPathUnchanged proves internal/state's convergence did not
+// relocate the hotkey preference: DefaultPrefsPath must still resolve to
+// exactly the path this package hardcoded before internal/state existed --
+// <os.UserConfigDir()>/Tachyon/shell.json -- computed here the old way, by
+// hand, and compared against what DefaultPrefsPath returns today. A silent
+// relocation of the hotkey preference is a real regression (an existing
+// user's rebound accelerator would stop being found), which is exactly what
+// this guards.
+func TestDefaultPrefsPathUnchanged(t *testing.T) {
+	t.Setenv(state.DirEnv, "")
+
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("no user config dir on this machine: %v", err)
+	}
+	want := filepath.Join(dir, "Tachyon", "shell.json")
+
+	got, err := DefaultPrefsPath()
+	if err != nil {
+		t.Fatalf("DefaultPrefsPath: %v", err)
+	}
+	if got != want {
+		t.Fatalf("DefaultPrefsPath() = %q; want the pre-internal/state path %q", got, want)
+	}
+}
 
 func TestNewStoreDefaultsWhenAbsent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "shell.json")
