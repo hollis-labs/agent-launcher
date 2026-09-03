@@ -37,6 +37,25 @@ away is unusable, and a palette that lingers is not a palette — so the split i
 structural, not cosmetic. The palette can open the manager; the manager never
 becomes the palette.
 
+### If the hotkey stops working
+
+macOS does not report a global-hotkey conflict. Another application can already
+own the combination, and Tachyon's registration still succeeds — the key simply
+never arrives. So the hotkey is configurable at runtime, and there are two ways
+to change it:
+
+- **The tray icon** — right-click it and choose *Settings…*. This is the
+  intended route.
+- **By hand** — edit `~/Library/Application Support/Tachyon/shell.json` and
+  change the top-level `"hotkey"` key (Wails accelerator spelling, e.g.
+  `"Ctrl+Option+Space"`), then restart Tachyon. A value that cannot be bound is
+  replaced with the default at startup rather than leaving you with no hotkey,
+  so a typo here costs a restart and nothing else.
+
+The second route matters because Tachyon has no Dock icon and no application
+menu — if the hotkey is dead *and* the status item is not drawing, the file is
+the way back in.
+
 Nothing is a sidecar. The Go core is bound into the app directly, so there is
 no subprocess on the interactive path at all — a subprocess per interaction
 was the measured cause of browsing lag, and removing it is the point. The
