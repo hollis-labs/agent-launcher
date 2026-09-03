@@ -145,6 +145,18 @@ type spawnFunc func(argv []string, cwd string) error
 // populating it from an explicit CLI override that this package's single
 // Launch(name) signature has no way to ask for.
 func launch(ctx context.Context, b binding.Binding, bundleRoot, bootRoot string, runner boot.Runner, spawn spawnFunc) error {
+	// Clear the target before cairn plants into it. cairn boot refuses an
+	// already-occupied Current (bootdir.PlantFiles's ErrExists) -- without
+	// this, only ever the very first launch of a given binding would
+	// succeed. Prepare renames any existing current aside rather than
+	// deleting it (T09), which is exactly the stable-directory contract
+	// this whole package's Composition.Target = b.Name choice above relies
+	// on: the same key T10 already proved reconciles with what cairn plants
+	// under.
+	if _, err := boot.Prepare(bootRoot, boot.Key(b.Name)); err != nil {
+		return fmt.Errorf("launch: preparing boot directory: %w", err)
+	}
+
 	comp := compose.Composition{
 		Target:   b.Name,
 		Bundle:   bundleRoot,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hollis-labs/tachyon/internal/binding"
@@ -108,7 +109,7 @@ func TestLaunch_CwdPreferenceBootDir(t *testing.T) {
 	rec := &spawnRecorder{}
 	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/Users/chrispian/dev/hollis-labs/apps/nanite"}
 
-	if err := launch(context.Background(), b, "/bundle/root", "/state/boot", fr.run, rec.spawn); err != nil {
+	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	if !rec.called {
@@ -156,7 +157,7 @@ func TestLaunch_CwdPreferenceProjectDir(t *testing.T) {
 	rec := &spawnRecorder{}
 	b := binding.Binding{Name: "eng-setup", Profile: "engineer", Scope: "/Users/chrispian/dev/projects/agent-setup"}
 
-	if err := launch(context.Background(), b, "/bundle/root", "/state/boot", fr.run, rec.spawn); err != nil {
+	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	if !rec.called {
@@ -172,7 +173,7 @@ func TestLaunch_ProjectDirPreferenceWithNilScopeIsAnError(t *testing.T) {
 	rec := &spawnRecorder{}
 	b := binding.Binding{Name: "broken", Profile: "x", Scope: "/x"}
 
-	err := launch(context.Background(), b, "/bundle/root", "/state/boot", fr.run, rec.spawn)
+	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error for cwd_preference project_dir with a nil scope")
 	}
@@ -187,7 +188,7 @@ func TestLaunch_UnrecognizedCwdPreferenceIsAnError(t *testing.T) {
 	rec := &spawnRecorder{}
 	b := binding.Binding{Name: "x", Profile: "x", Scope: "/x"}
 
-	err := launch(context.Background(), b, "/bundle/root", "/state/boot", fr.run, rec.spawn)
+	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error for an unrecognized cwd_preference")
 	}
@@ -201,7 +202,7 @@ func TestLaunch_UnknownProviderIsAnError(t *testing.T) {
 	rec := &spawnRecorder{}
 	b := binding.Binding{Name: "codex-thing", Profile: "x", Scope: "/x"}
 
-	err := launch(context.Background(), b, "/bundle/root", "/state/boot", fr.run, rec.spawn)
+	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error for a provider with no known harness binary")
 	}
@@ -216,7 +217,7 @@ func TestLaunch_InvokeErrorPropagatesAndSpawnNeverCalled(t *testing.T) {
 	rec := &spawnRecorder{}
 	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/x"}
 
-	err := launch(context.Background(), b, "/bundle/root", "/state/boot", fr.run, rec.spawn)
+	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error when cairn failed")
 	}
@@ -234,8 +235,10 @@ func TestLaunch_ComposeBuildErrorPropagatesWithoutInvokingRunner(t *testing.T) {
 	rec := &spawnRecorder{}
 	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/x"}
 
-	// Empty bootRoot: compose.Build refuses (compose.ErrNoBootRoot), so
-	// this never should reach the runner at all.
+	// Empty bootRoot: boot.Prepare refuses it ("root is required") before
+	// compose.Build ever runs (compose.Build would separately refuse via
+	// compose.ErrNoBootRoot if it were reached) -- either way this must
+	// never reach the runner.
 	err := launch(context.Background(), b, "/bundle/root", "", fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error for a missing boot root")
@@ -245,6 +248,64 @@ func TestLaunch_ComposeBuildErrorPropagatesWithoutInvokingRunner(t *testing.T) {
 	}
 	if rec.called {
 		t.Fatal("spawn was called despite compose.Build failing")
+	}
+}
+
+func TestLaunch_RelaunchingSameBindingMovesPreviousAsideInsteadOfFailing(t *testing.T) {
+	bootRoot := t.TempDir()
+	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/Users/chrispian/dev/hollis-labs/apps/nanite"}
+
+	fr1 := &fakeRunner{stdout: []byte(bootDirFixture)}
+	rec1 := &spawnRecorder{}
+	if err := launch(context.Background(), b, "/bundle/root", bootRoot, fr1.run, rec1.spawn); err != nil {
+		t.Fatalf("first launch: %v", err)
+	}
+	if !rec1.called {
+		t.Fatal("first launch: spawn was not called")
+	}
+
+	// Without boot.Prepare, this second call is exactly the case that used
+	// to reach a real `cairn boot` and fail with "boot directory already
+	// exists" -- fakeRunner can't reproduce cairn's own refusal (it always
+	// succeeds), so what this test actually proves is the thing that makes
+	// that refusal avoidable in the first place: Prepare clears
+	// bootRoot/<key>/current on every call, unconditionally, before cairn
+	// (real or fake) ever runs.
+	current := filepath.Join(bootRoot, boot.Key(b.Name), boot.CurrentSegment)
+	if err := os.MkdirAll(current, 0o755); err != nil {
+		t.Fatalf("seeding an existing current dir: %v", err)
+	}
+
+	fr2 := &fakeRunner{stdout: []byte(bootDirFixture)}
+	rec2 := &spawnRecorder{}
+	if err := launch(context.Background(), b, "/bundle/root", bootRoot, fr2.run, rec2.spawn); err != nil {
+		t.Fatalf("second launch (relaunch): %v", err)
+	}
+	if !rec2.called {
+		t.Fatal("second launch: spawn was not called")
+	}
+
+	keyDir := filepath.Join(bootRoot, boot.Key(b.Name))
+	entries, err := os.ReadDir(keyDir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", keyDir, err)
+	}
+	prevCount := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), boot.PrevPrefix) {
+			prevCount++
+		}
+	}
+	if prevCount != 1 {
+		t.Fatalf("found %d %s* entries under %s; want exactly 1", prevCount, boot.PrevPrefix, keyDir)
+	}
+	// Prepare's own postcondition: nothing exists at Current when it
+	// returns without error (planting a fresh one is cairn's job, which
+	// this fakeRunner never actually does) -- so its absence here is what
+	// proves the second launch() call reached Prepare and it cleared the
+	// seeded directory rather than erroring out on it.
+	if _, err := os.Stat(current); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("current (%s) still exists after relaunch (err=%v); want it cleared", current, err)
 	}
 }
 
