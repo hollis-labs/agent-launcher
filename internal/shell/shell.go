@@ -12,6 +12,9 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/icons"
+
+	"github.com/hollis-labs/tachyon/internal/bundle"
+	"github.com/hollis-labs/tachyon/internal/manager"
 )
 
 // Config is everything the shell needs from its host.
@@ -23,6 +26,13 @@ type Config struct {
 	// PrefsPath overrides where preferences are stored. Empty means
 	// DefaultPrefsPath. Tests set it; the app does not.
 	PrefsPath string
+
+	// BundleRootStorePath overrides where the manager's active-bundle-root
+	// setting is persisted (see [bundle.RootStore]). Empty means
+	// [bundle.DefaultRootStore]. Tests set it so a test run never touches
+	// ~/Library/Application Support or, through the default it stores,
+	// implies anything about ~/dev/projects/agent-setup.
+	BundleRootStorePath string
 
 	// Logger receives shell diagnostics. Nil means slog.Default.
 	Logger *slog.Logger
@@ -76,6 +86,12 @@ func New(cfg Config) (*Shell, error) {
 		return nil, err
 	}
 
+	rootStore, err := bundleRootStore(cfg.BundleRootStorePath)
+	if err != nil {
+		return nil, err
+	}
+	mgr := manager.New(rootStore)
+
 	s := &Shell{
 		log:           log,
 		prefs:         prefs,
@@ -100,6 +116,7 @@ func New(cfg Config) (*Shell, error) {
 		},
 		Services: []application.Service{
 			application.NewService(&Service{shell: s}),
+			application.NewService(mgr),
 		},
 		LogLevel: slog.LevelWarn,
 	})
@@ -112,6 +129,18 @@ func New(cfg Config) (*Shell, error) {
 	s.wireHotkey()
 
 	return s, nil
+}
+
+// bundleRootStore resolves the settings file the manager persists its active
+// bundle root to. An explicit override (tests) is used verbatim; otherwise it
+// is [bundle.DefaultRootStore] — a different file from the shell's own
+// preferences, since the bundle root is a fact about which bundle is being
+// edited, not about the shell's windows.
+func bundleRootStore(override string) (bundle.RootStore, error) {
+	if override != "" {
+		return bundle.RootStore{Path: override}, nil
+	}
+	return bundle.DefaultRootStore()
 }
 
 // paletteOptions is the palette posture. Every field here is load-bearing;

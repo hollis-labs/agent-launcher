@@ -22,11 +22,19 @@
 //
 // # Bytes in, bytes out
 //
-// [Bundle.Read] returns a file's bytes exactly as they sit on disk. Nothing in
-// this package parses and re-serializes a file: there is no YAML document
-// model, no formatter, no newline normalization (D5). [Header] is a shallow
-// scan of a frontmatter block for four fields a tree wants to display; it is
-// deliberately lossy and deliberately not a save path.
+// [Bundle.Read] returns a file's bytes exactly as they sit on disk, and
+// [Bundle.Write] is its mirror: what a caller hands in is what lands on disk,
+// byte for byte, with an atomic rename so a crash mid-write cannot corrupt
+// the original. Nothing in this package parses and re-serializes a file:
+// there is no YAML document model, no formatter, no newline normalization
+// (D5). [Header] is a shallow scan of a frontmatter block for four fields a
+// tree wants to display; it is deliberately lossy and deliberately not a save
+// path — Write never derives bytes from a Header.
+//
+// Write only replaces an artifact Resolve already finds; it does not create
+// new files by name. That keeps exactly one authority over "what artifacts
+// exist" — the directory listing — rather than splitting it between the
+// listing and an id this package would otherwise have to validate.
 //
 // # Shape and existence only
 //

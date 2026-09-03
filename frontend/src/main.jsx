@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
+import ErrorBoundary from "./ErrorBoundary.jsx";
 import "./styles.css";
 
 // The Wails runtime is served by the Go asset server at /wails/runtime.js, so
@@ -19,7 +20,9 @@ async function boot() {
   }
   createRoot(document.getElementById("root")).render(
     <StrictMode>
-      <App />
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </StrictMode>,
   );
 }

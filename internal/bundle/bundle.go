@@ -308,6 +308,67 @@ func (b *Bundle) Read(ref Ref) ([]byte, error) {
 	return nil, err
 }
 
+// Write replaces an artifact's bytes exactly as given.
+//
+// Nothing is parsed, decoded, re-encoded, validated or normalized on this
+// path — no YAML AST, no formatter, no trailing-whitespace trim, no newline
+// normalization (D5). Write is Read's mirror: what a caller hands in is what
+// ends up on disk, byte for byte, or the write fails and nothing on disk
+// changes.
+//
+// The ref must already resolve to a file the bundle enumerates — Write edits
+// an existing artifact, it does not create a new one by name. A caller that
+// wants a brand new file creates it directly (e.g. with os.WriteFile) and
+// lets the next enumeration find it; that keeps "which files exist" answered
+// in exactly one place, the directory listing, rather than also in this
+// package's idea of a valid id.
+//
+// The write is atomic: the new bytes land in a temporary file in the same
+// directory, then an os.Rename replaces the original in one step, so a crash
+// or a concurrent read mid-write never observes a half-written file. The
+// original file's permission bits are preserved when they can be read, and
+// default to 0o644 otherwise — Write only ever touches content, never mode.
+func (b *Bundle) Write(ref Ref, data []byte) error {
+	p, err := b.Resolve(ref)
+	if err != nil {
+		return err
+	}
+
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(p); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+
+	dir := filepath.Dir(p)
+	tmp, err := os.CreateTemp(dir, ".tachyon-*.tmp")
+	if err != nil {
+		return fmt.Errorf("bundle: creating temp file in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("bundle: writing %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("bundle: closing %s: %w", tmpName, err)
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return fmt.Errorf("bundle: setting mode on %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, p); err != nil {
+		return fmt.Errorf("bundle: replacing %s: %w", p, err)
+	}
+	ok = true
+	return nil
+}
+
 // Resolve returns the absolute path a ref names, without reading it.
 //
 // It returns [ErrNotFound] when nothing in the bundle answers to the ref —
