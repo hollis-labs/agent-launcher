@@ -1,46 +1,67 @@
 # Tachyon
 
-Tachyon is the standalone, user-facing launcher app for the Tether launch substrate.
+Tachyon is the **user-facing surface of the agent system**. It does two things:
+it edits the system's files, and it starts a session from them.
 
-It keeps the native macOS front-end from `tether-launcher`, but the launch path now runs through a dedicated Go sidecar, `tachyon-engine`, which consumes the public shared libraries instead of Tether internals.
+## The seam
 
-## Layout
+Three responsibilities, three owners. The whole design rests on this.
 
-```text
-tachyon/
-  app/        Swift/AppKit menubar launcher
-  engine/     Go sidecar; consumes go-agent-launch and related public libs
-  build.sh    Builds the engine and bundles the macOS app
-```
+| | Owner | What |
+|---|---|---|
+| **Content** | `agent-setup` (the bundle) | profiles, templates, role prose, skills, bindings, hooks |
+| **Materialization** | Cairn | resolve a profile, assemble a directory, print its path, exit |
+| **Authoring + launching** | **Tachyon** | edit the bundle; compose; build argv; spawn a terminal |
 
-## Build
+Cairn does not own content — it is a materializer pointed at a bundle, and
+`agent-setup` is one bundle it can be pointed at. Tachyon is not a Cairn
+front-end; it is an editor of the agent system that invokes Cairn to render it.
 
-```bash
-./build.sh
-open dist/Tachyon.app
-```
+**Tether is not in this picture.** Tether launches session agents; Tachyon is
+100% user-facing. A human presses a hotkey and a terminal opens. That is why
+Tachyon has no session model, no daemon dependency and no headless path.
 
-The built engine is bundled into `Tachyon.app/Contents/Resources/tachyon-engine`.
+## What it is
 
-## Current launch sources
+A single Wails v3 + React desktop app: two window classes over one shared Go
+core, behind one tray icon.
 
-Tachyon is local-first:
+- **The palette** — hotkey-summoned, frameless, always-on-top, dismissed on
+  Escape and on blur. Pick a binding or compose one; launch; vanish. This is the
+  fast path, and it is what Tachyon is for.
+- **The manager** — an ordinary window that does *not* dismiss on blur. A file
+  tree over the bundle and a text editor. This is the CRUD.
 
-- The engine ships a bundled catalog corpus, so `list` / `describe` / `launch`
-  work fully offline with no directory service and no `~/.tether/catalog`.
-- When `~/.tether/catalog` is present it is ingested through the same
-  file-backed public registry surface exposed by `go-agent-launch`.
-- When native `boot-spec` contracts are present, Tachyon lists and describes
-  them through the same registry path.
+The postures are mutually exclusive — an editor that vanishes when you click
+away is unusable, and a palette that lingers is not a palette — so the split is
+structural, not cosmetic. The palette can open the manager; the manager never
+becomes the palette.
 
-## Notes
+Nothing is a sidecar. The Go core is bound into the app directly, so there is
+no subprocess on the interactive path at all — a subprocess per interaction
+was the measured cause of browsing lag, and removing it is the point. The
+launch path is a different thing and it does spawn: **Cairn**, once per
+launch, and then **the terminal itself** (iTerm2 via AppleScript).
 
-- The engine is a plain consumer of `go-agent-launch v0.3.5` (and its public
-  shared libraries) — pinned off published tags, no `replace` directives.
-- No Tether-internal Go packages are imported.
-- **Interactive launch is the only supported mode** (decision D-T2). Launch
-  `Mode` is derived from the resolved runner; autonomous / headless launches
-  are Torque's responsibility, not Tachyon's.
-- The engine surfaces go-agent-launch's headless-claude fail-fast gate, so a
-  misconfigured non-interactive claude launch is rejected, never hung.
+## What it does not do
 
+Stated so nobody designs around a promise that is not there.
+
+- **It never runs `cairn install`.** That rewrites the live `~/.claude` of the
+  machine it runs on; it is human-executed, permanently. (`cairn install
+  --check` is safe and may be surfaced read-only.)
+- **It never runs git.** It writes files into a git repo; the user commits.
+- **It holds no session state.** No list, no attach, no resume.
+- **It never writes to a Cairn store.** The catalog is the bundle.
+- **It does not validate content.** Shape and existence only.
+
+## Status
+
+Being rebuilt, and currently the cleared ground for that rebuild. The Swift
+menubar app, the Go sidecar behind it, its bundled catalog corpus, the
+frozen `list`/`describe`/`launch` contract and the `go-agent-launch` dependency
+have all been deleted. Nothing here launches anything yet.
+
+- Plan: `CW-20260518-0061`.
+- Target architecture (decisions D1–D10):
+  `~/dev/agent-os/workspaces/drafts/tachyon/session-20260902-0ce7995c/target-architecture.md`

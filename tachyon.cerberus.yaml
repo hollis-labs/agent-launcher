@@ -10,22 +10,18 @@ resources:
     type: process
     project: tachyon
     connector: local
+    # `build_strategy` and `command` are deliberately absent. They named
+    # `build.sh` and `dist/Tachyon.app/Contents/MacOS/Tachyon`, both deleted
+    # with the Swift app in CW-20260903-0005. The registration is kept; the
+    # build and the artifact are re-declared when the Wails app lands
+    # (CW-20260903-0007). Until then this resource is registered, not runnable.
     config:
-      build_strategy:
-        kind: legacy_command
-        rules:
-          command:
-            - bash
-            - build.sh
-      command:
-        - /Users/chrispian/dev/projects/tachyon/dist/Tachyon.app/Contents/MacOS/Tachyon
       dir: /Users/chrispian/dev/projects/tachyon
       mode: os_service
       run_from: workspace
       supervisor: launchd
     tags:
       - gui
-      - swift
       - macos
       - menubar
       - launchd
