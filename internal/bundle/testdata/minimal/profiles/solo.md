@@ -1,0 +1,4 @@
+---
+id: solo
+name: Solo
+---
