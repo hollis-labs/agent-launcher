@@ -110,7 +110,7 @@ func roleProseScaffold(spec Spec) []byte {
 //     -- its newline with it, ... A marker that shares its line with content
 //     is the other case: only the marker goes, and the line stays exactly as
 //     it was written." templates/agents.md in this bundle is the real file
-//     that rule was independently re-verified against: line 12,
+//     that rule was independently re-verified against: line 14,
 //     "- scope: <!-- cairn:value scope -->", is exactly the shared-line
 //     example this scaffold repeats.
 //
