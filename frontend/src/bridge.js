@@ -7,6 +7,7 @@
 const SHELL_SERVICE = "github.com/hollis-labs/tachyon/internal/shell.Service";
 const MANAGER_SERVICE = "github.com/hollis-labs/tachyon/internal/manager.Service";
 const BINDING_SERVICE = "github.com/hollis-labs/tachyon/internal/binding.Service";
+const LAUNCH_SERVICE = "github.com/hollis-labs/tachyon/internal/launch.Service";
 
 function callService(service, method, ...args) {
   const wails = globalThis.wails;
@@ -56,4 +57,15 @@ export const Binding = {
   Create: (b) => callService(BINDING_SERVICE, "Create", b),
   Update: (b) => callService(BINDING_SERVICE, "Update", b),
   Delete: (name) => callService(BINDING_SERVICE, "Delete", name),
+};
+
+// Launch is internal/launch.Service: the palette's one entry point for
+// turning a picked binding into a running terminal (CW-20260903-0016).
+// Binding(name) resolves the named binding, runs `cairn boot` for it, and
+// spawns iTerm2 on the result -- fire-and-forget, no session handle. The
+// returned promise rejects with whatever internal/launch.Service.Launch
+// returned as an error; there is no success payload beyond the promise
+// resolving.
+export const Launch = {
+  Binding: (name) => callService(LAUNCH_SERVICE, "Launch", name),
 };

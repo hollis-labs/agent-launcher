@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Binding, Shell } from "./bridge.js";
+import { Binding, Launch, Shell } from "./bridge.js";
 
 // The palette lists the active bundle's bindings, filterable by name, and
-// lets the user move a selection over them with the mouse or the arrow keys.
-// That is the whole of this task (CW-20260903-0011): composing a selection
-// into a Cairn invocation is CW-20260903-0012, and Enter summoning it is
-// CW-20260903-0013, so Enter is a deliberate no-op here — see onKeyDown.
+// lets the user move a selection over them with the mouse or the arrow
+// keys. Enter resolves the active row's binding through
+// internal/launch.Service.Launch — runs `cairn boot` for it and spawns
+// iTerm2 on the result (CW-20260903-0016) — and dismisses the palette on
+// success; a launch failure is shown inline instead, and the palette stays
+// open so the user can try again. See onKeyDown.
 // The compose form (CW-20260903-0017) and saving a composition as a new
-// binding (CW-20260903-0018) are further out still; this window only reads.
+// binding (CW-20260903-0018) are further out still; this window only reads
+// bindings, it does not build or edit compositions.
 export default function Palette() {
   const [bindings, setBindings] = useState(null); // null = loading
   const [error, setError] = useState("");
+  const [launchError, setLaunchError] = useState("");
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef(null);
@@ -56,9 +60,19 @@ export default function Palette() {
       e.preventDefault();
       setActiveIndex((i) => (i - 1 + filtered.length) % filtered.length);
     } else if (e.key === "Enter") {
-      // Deliberately nothing — see the file comment. Launching a binding is
-      // CW-20260903-0012 / -0013; selecting one is as far as this task goes.
       e.preventDefault();
+      const target = filtered[activeIndex];
+      if (!target) return;
+      setLaunchError("");
+      // Fire-and-forget from the palette's own point of view too: Launch
+      // resolves once iTerm2 has been asked to open, not once a session is
+      // running inside it — internal/launch.Service holds no handle on
+      // what it started (D7), so there is nothing further to await here.
+      // On success, pick/launch/vanish (§1); on failure, stay open and
+      // show why, rather than dismissing on a launch that didn't happen.
+      Launch.Binding(target.name)
+        .then(() => Shell.HidePalette())
+        .catch((err) => setLaunchError(String(err?.message ?? err)));
     }
   }
 
@@ -70,9 +84,18 @@ export default function Palette() {
         autoFocus
         spellCheck={false}
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setLaunchError("");
+        }}
         onKeyDown={onKeyDown}
       />
+
+      {launchError ? (
+        <div className="err" style={{ padding: "8px 14px" }}>
+          Couldn't launch: {launchError}
+        </div>
+      ) : null}
 
       {error ? (
         <div className="placeholder">

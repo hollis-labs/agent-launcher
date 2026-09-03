@@ -15,6 +15,7 @@ import (
 
 	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/bundle"
+	"github.com/hollis-labs/tachyon/internal/launch"
 	"github.com/hollis-labs/tachyon/internal/manager"
 )
 
@@ -95,6 +96,9 @@ func New(cfg Config) (*Shell, error) {
 	// The same rootStore the manager reads, so the palette's bindings list
 	// and the manager's tree always agree on which bundle is active.
 	bindings := binding.NewService(rootStore)
+	// Same rootStore again: a launch resolves the binding the palette just
+	// showed, from the same bundle everything else above is reading.
+	launcher := launch.NewService(rootStore)
 
 	s := &Shell{
 		log:           log,
@@ -122,6 +126,7 @@ func New(cfg Config) (*Shell, error) {
 			application.NewService(&Service{shell: s}),
 			application.NewService(mgr),
 			application.NewService(bindings),
+			application.NewService(launcher),
 		},
 		LogLevel: slog.LevelWarn,
 	})
