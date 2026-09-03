@@ -1,0 +1,20 @@
+# Fixture bindings file. It mirrors the live agent-setup/bindings.yaml shape
+# closely enough to exercise this package's read and write paths: aliases,
+# literal paths, quoted values, a trailing comma, and comments sitting
+# between entries.
+#
+# filestore_test.go asserts exact bytes in several places — do not
+# "clean up" this file's formatting.
+
+scopes:
+  home: ~/dev/home
+  tool: ~/dev/projects/tool
+
+bindings:
+  # A leading comment before the first entry.
+  aliased:   { profile: planner,  scope: home }
+  literal:   { profile: engineer, scope: ~/dev/projects/literal }
+
+  # A comment between entries.
+  quoted:    { profile: 'odd name', scope: "~/dev/has space" }
+  trailing:  { profile: architect, scope: tool, }

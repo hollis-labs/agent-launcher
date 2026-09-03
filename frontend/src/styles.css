@@ -48,6 +48,44 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   line-height: 1.8;
 }
 
+.palette-list {
+  flex: 1;
+  overflow: auto;
+  list-style: none;
+  margin-top: 10px;
+}
+.palette-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.palette-row.active { background: #202632; }
+.palette-row-name { font-size: 13px; }
+.palette-row-profile {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+  flex-shrink: 0;
+}
+.palette-row-scope {
+  margin-left: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+
 .manager-shell { height: 100%; display: flex; flex-direction: column; }
 .manager-shell header {
   display: flex;

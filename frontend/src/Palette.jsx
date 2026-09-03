@@ -1,32 +1,122 @@
-import { useEffect } from "react";
-import { Shell } from "./bridge.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Binding, Shell } from "./bridge.js";
 
-// The palette is deliberately empty. Bindings, filtering and the compose form
-// are CW-20260903-0011 / -0017; this task ships the window posture only.
-//
-// No hotkey echo here on purpose: the accelerator is settings-page material,
-// not palette material — this window is shown/hidden rather than reloaded, so
-// a value fetched once on mount goes stale the moment the user rebinds
-// elsewhere. "Currently bound" already lives correctly in Settings.
+// The palette lists the active bundle's bindings, filterable by name, and
+// lets the user move a selection over them with the mouse or the arrow keys.
+// That is the whole of this task (CW-20260903-0011): composing a selection
+// into a Cairn invocation is CW-20260903-0012, and Enter summoning it is
+// CW-20260903-0013, so Enter is a deliberate no-op here — see onKeyDown.
+// The compose form (CW-20260903-0017) and saving a composition as a new
+// binding (CW-20260903-0018) are further out still; this window only reads.
 export default function Palette() {
+  const [bindings, setBindings] = useState(null); // null = loading
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef(null);
+
   useEffect(() => {
     document.body.classList.add("palette");
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    Binding.List()
+      .then((list) => {
+        if (!cancelled) setBindings(list ?? []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String(err?.message ?? err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filtered = useMemo(() => {
+    const list = bindings ?? [];
+    const q = query.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((b) => b.name.toLowerCase().includes(q));
+  }, [bindings, query]);
+
+  // The active row must stay in range as filtering shrinks or reorders the
+  // list — an index left pointing past the end, or at a row that scrolled
+  // out from under it, is worse than resetting to the top.
+  useEffect(() => {
+    setActiveIndex((i) => (filtered.length === 0 ? 0 : Math.min(i, filtered.length - 1)));
+  }, [filtered.length]);
+
+  function onKeyDown(e) {
+    if (filtered.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => (i + 1) % filtered.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => (i - 1 + filtered.length) % filtered.length);
+    } else if (e.key === "Enter") {
+      // Deliberately nothing — see the file comment. Launching a binding is
+      // CW-20260903-0012 / -0013; selecting one is as far as this task goes.
+      e.preventDefault();
+    }
+  }
+
   return (
     <div className="palette-shell">
-      <input placeholder="Search bindings…" autoFocus spellCheck={false} />
-      <div className="placeholder">
-        <div>
-          <div className="ok">⌁ Tachyon palette</div>
-          <div style={{ marginTop: 10 }}>
-            <kbd>Esc</kbd> dismisses · clicking away dismisses
-          </div>
-          <div style={{ marginTop: 16 }}>
-            <button onClick={() => Shell.OpenManager()}>Open manager</button>
+      <input
+        ref={inputRef}
+        placeholder="Search bindings…"
+        autoFocus
+        spellCheck={false}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={onKeyDown}
+      />
+
+      {error ? (
+        <div className="placeholder">
+          <div>
+            <div className="err">Couldn't load bindings</div>
+            <div className="muted" style={{ marginTop: 8 }}>{error}</div>
+            <div style={{ marginTop: 16 }}>
+              <button onClick={() => Shell.OpenManager()}>Open manager</button>
+            </div>
           </div>
         </div>
-      </div>
+      ) : bindings === null ? (
+        <div className="placeholder muted">Loading bindings…</div>
+      ) : filtered.length === 0 ? (
+        <div className="placeholder">
+          <div>
+            <div className="muted">
+              {bindings.length === 0 ? "No bindings yet" : "No bindings match your search"}
+            </div>
+            <div style={{ marginTop: 16 }}>
+              <button onClick={() => Shell.OpenManager()}>Open manager</button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <ul className="palette-list" role="listbox">
+          {filtered.map((b, i) => (
+            <li key={b.name}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={i === activeIndex}
+                className={"palette-row" + (i === activeIndex ? " active" : "")}
+                onMouseEnter={() => setActiveIndex(i)}
+                onClick={() => setActiveIndex(i)}
+              >
+                <span className="palette-row-name">{b.name}</span>
+                <span className="palette-row-profile">{b.profile}</span>
+                <span className="palette-row-scope">{b.scope}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

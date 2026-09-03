@@ -6,6 +6,7 @@
 // that pkg/application/bindings.go builds: "<package path>.<Type>.<Method>".
 const SHELL_SERVICE = "github.com/hollis-labs/tachyon/internal/shell.Service";
 const MANAGER_SERVICE = "github.com/hollis-labs/tachyon/internal/manager.Service";
+const BINDING_SERVICE = "github.com/hollis-labs/tachyon/internal/binding.Service";
 
 function callService(service, method, ...args) {
   const wails = globalThis.wails;
@@ -37,4 +38,16 @@ export const Manager = {
   Open: (kind, id) => callService(MANAGER_SERVICE, "Open", kind, id),
   Save: (kind, id, contentBase64) => callService(MANAGER_SERVICE, "Save", kind, id, contentBase64),
   Root: () => callService(MANAGER_SERVICE, "Root"),
+};
+
+// Binding is internal/binding.Service: the bundle's bindings.yaml, read and
+// written through internal/binding.Store — see that package's doc for why a
+// binding's scope is always a path here, never one of bindings.yaml's own
+// scopes: alias names. Create and Update take a binding shaped
+// { name, profile, scope }.
+export const Binding = {
+  List: () => callService(BINDING_SERVICE, "List"),
+  Create: (b) => callService(BINDING_SERVICE, "Create", b),
+  Update: (b) => callService(BINDING_SERVICE, "Update", b),
+  Delete: (name) => callService(BINDING_SERVICE, "Delete", name),
 };

@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/icons"
 
+	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/manager"
 )
@@ -91,6 +92,9 @@ func New(cfg Config) (*Shell, error) {
 		return nil, err
 	}
 	mgr := manager.New(rootStore)
+	// The same rootStore the manager reads, so the palette's bindings list
+	// and the manager's tree always agree on which bundle is active.
+	bindings := binding.NewService(rootStore)
 
 	s := &Shell{
 		log:           log,
@@ -117,6 +121,7 @@ func New(cfg Config) (*Shell, error) {
 		Services: []application.Service{
 			application.NewService(&Service{shell: s}),
 			application.NewService(mgr),
+			application.NewService(bindings),
 		},
 		LogLevel: slog.LevelWarn,
 	})
