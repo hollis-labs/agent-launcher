@@ -2,13 +2,38 @@
 // stable, reused-in-place directories Cairn plants a bundle into before a
 // terminal opens on top of them.
 //
-// This package owns exactly two things: deriving a stable directory key for
-// a binding or an unsaved composition, and clearing that key's path before
-// the next plant. It does not invoke Cairn (that is T10, CW-20260903-0014)
-// and it does not clean up what it leaves behind (that is T15,
-// CW-20260903-0019, and it runs only behind a liveness guard this package
-// has no part of). See plan CW-20260518-0061, decision D6, and target
-// architecture §5 for the design this implements.
+// This package owns three things: deriving a stable directory key for a
+// binding or an unsaved composition, clearing that key's path before the
+// next plant, and — as of T10, CW-20260903-0014 — running the one Cairn
+// invocation a launch needs and decoding its --json report. See [Invoke],
+// [Result] and [HarnessArgv] in invoke.go for that part; the package doc
+// below (written for T09) covers the first two. It still does not clean up
+// what a plant leaves behind (that is T15, CW-20260903-0019, and it runs
+// only behind a liveness guard this package has no part of). See plan
+// CW-20260518-0061, decision D6, and target architecture §5 for the design
+// this implements.
+//
+// # Invoking Cairn (T10)
+//
+// [Invoke] runs a caller-supplied argv (built by internal/compose.Build,
+// T08 — this package still does not know or care what built it) through an
+// injectable [Runner], so every test but one substitutes a fake instead of
+// shelling out; [ExecRunner] is the one real implementation, and the one
+// subprocess anywhere in this design. [Result] decodes Cairn's six-key
+// --json contract; [HarnessArgv] builds the harness's launch argv from it.
+//
+// Two decisions there are permanent, not incidental: [HarnessArgv] always
+// includes --settings <BootDir>/.claude/settings.json (dropping it
+// silently downgrades defaultMode: auto — see CW-20260903-0014's hazard
+// section), and it never includes the provider's project-dir flag
+// (--add-dir for Claude Code) — redundant once --settings is always
+// passed, per the access.directories human gate. Cairn's stderr is always
+// returned, never treated as a failure signal on its own; a non-zero exit
+// is reported as an [*InvokeError] carrying that stderr, not a generic
+// failure. Nothing here scrapes AGENTS.md, and nothing here reaches for a
+// boot root itself — that stays exactly what internal/state (T22) and
+// internal/compose (T08) already made it: a value a caller computes and
+// passes in.
 //
 // # Why a stable directory at all
 //
