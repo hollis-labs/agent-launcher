@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 
 	"github.com/hollis-labs/tachyon/internal/bundle"
+	"github.com/hollis-labs/tachyon/internal/skeleton"
 )
 
 // Service is bound to the frontend as a Wails service. Its exported methods
@@ -297,4 +298,51 @@ func (s *Service) describe(b *bundle.Bundle, ref bundle.Ref, data []byte) (Conte
 // a full Tree call.
 func (s *Service) Root() (string, error) {
 	return s.store.Resolve()
+}
+
+// --- CW-20260903-0010: the "new artifact" entry point ---
+//
+// The two methods below are this task's one deliberately narrow addition to
+// this service. Everything above this line is T05's (CW-20260903-0009) and
+// is untouched; the scaffold content itself, and the dispatch table a future
+// binding case extends, live entirely in internal/skeleton — see that
+// package's doc for the seam CW-20260903-0011 (T07) will fill in.
+
+// NewArtifactKinds reports which kinds [Service.NewArtifact] can create
+// today, so the frontend's "new artifact" picker does not hardcode a list
+// that could drift from what actually works. bundle.KindBinding is
+// deliberately absent — see internal/skeleton's package doc — and reappears
+// here automatically once that package's registry gains an entry for it, no
+// frontend change required.
+func (s *Service) NewArtifactKinds() []bundle.Kind {
+	return skeleton.SupportedKinds()
+}
+
+// NewArtifact creates a brand-new artifact from a kind-appropriate skeleton
+// (internal/skeleton) and returns it in the same [Content] shape
+// [Service.Open] and [Service.Save] do, so the frontend can open the result
+// directly in the editor without a second round trip.
+//
+// name and description are used only by the kinds whose scaffold has
+// somewhere to put them (see [skeleton.Spec]); passing them for a kind that
+// ignores them is harmless.
+func (s *Service) NewArtifact(kind, id, name, description string) (Content, error) {
+	b, err := s.open()
+	if err != nil {
+		return Content{}, err
+	}
+	ref, err := skeleton.New(b.Root(), skeleton.Spec{
+		Kind:        bundle.Kind(kind),
+		ID:          id,
+		Name:        name,
+		Description: description,
+	})
+	if err != nil {
+		return Content{}, err
+	}
+	data, err := b.Read(ref)
+	if err != nil {
+		return Content{}, err
+	}
+	return s.describe(b, ref, data)
 }

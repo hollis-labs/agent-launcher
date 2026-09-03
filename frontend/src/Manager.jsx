@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Manager as ManagerAPI, Shell } from "./bridge.js";
 import { base64ToText, textToBase64 } from "./bytes.js";
+// CW-20260903-0010's "new artifact" entry point. Its own file, its own
+// state; see NewArtifact.jsx's header comment for why it is not folded in
+// here.
+import NewArtifact from "./NewArtifact.jsx";
 
 // The bundle tree and the text editor: CW-20260903-0009. Every artifact is a
 // text buffer — bytes in, bytes out. This window never parses, reformats or
@@ -82,6 +86,12 @@ function Bundle() {
   // that actually failed to open (including the invalid-UTF-8 case below),
   // and Save would silently overwrite it with nothing.
   const [loaded, setLoaded] = useState(false);
+
+  // creating toggles the "new artifact" panel (CW-20260903-0010). It is
+  // deliberately independent of every piece of state above: opening it
+  // never touches the currently-open editor, and closing it (Cancel, or a
+  // successful create) never touches anything else either.
+  const [creating, setCreating] = useState(false);
 
   const dirty = selectedNode != null && draftText !== originalText;
   const dirtyRef = useRef(dirty);
@@ -255,7 +265,22 @@ function Bundle() {
           <button onClick={loadTree} title="Re-read the bundle from disk">
             Refresh
           </button>
+          <button onClick={() => setCreating(true)} title="Create a new artifact">
+            + New
+          </button>
         </div>
+        {/* CW-20260903-0010's entry point. See NewArtifact.jsx; this is the
+            panel's only mount point in the whole manager window. */}
+        {creating && (
+          <NewArtifact
+            onCancel={() => setCreating(false)}
+            onCreated={(content) => {
+              setCreating(false);
+              loadTree();
+              openNode(content);
+            }}
+          />
+        )}
         {treeError && <p className="err tree-msg">{treeError}</p>}
         {tree && (
           <div className="tree-groups">

@@ -38,6 +38,12 @@ export const Manager = {
   Open: (kind, id) => callService(MANAGER_SERVICE, "Open", kind, id),
   Save: (kind, id, contentBase64) => callService(MANAGER_SERVICE, "Save", kind, id, contentBase64),
   Root: () => callService(MANAGER_SERVICE, "Root"),
+  // NewArtifactKinds/NewArtifact are CW-20260903-0010's addition: see
+  // internal/manager.Service's "new artifact entry point" section. kind is
+  // one of bundle.Kind's values as a plain string, same as Open/Save above.
+  NewArtifactKinds: () => callService(MANAGER_SERVICE, "NewArtifactKinds"),
+  NewArtifact: (kind, id, name, description) =>
+    callService(MANAGER_SERVICE, "NewArtifact", kind, id, name, description),
 };
 
 // Binding is internal/binding.Service: the bundle's bindings.yaml, read and
