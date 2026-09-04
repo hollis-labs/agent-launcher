@@ -28,21 +28,21 @@ func TestPaletteBindinglessCompositionContract(t *testing.T) {
 		`className="palette-row-compose"`,
 		`onDoubleClick={() => onLaunch(b.name)}`,
 		`Launch.Binding(name)`,
-		`const [composeBinding, setComposeBinding] = useState("")`,
-		`setComposeBinding(name)`,
-		`const target = bindingless ? baseProfile.trim() : composeOpen ? composeBinding : activeTarget?.name`,
-		`targetName={bindingless ? baseProfile.trim() : composeBinding}`,
-		`const [baseProfile, setBaseProfile] = useState("")`,
+		`compositionDraftReducer`,
+		`compositionInput(composition)`,
+		`dispatchComposition({ type: "OPEN_BINDING", target: name })`,
+		`dispatchComposition({ type: "OPEN_PROFILE" })`,
+		`targetName={composeTarget}`,
+		`targetDraft: baseProfile`,
 		`list="compose-profile-suggestions"`,
 		`list="compose-part-suggestions"`,
 		`list="compose-skill-suggestions"`,
 		`list="compose-prompt-suggestions"`,
 		`list="compose-project-suggestions"`,
-		`target,`,
-		`Launch.Composition({`,
+		`Launch.Composition(input)`,
 		`return Shell.HidePalette()`,
-		`window.addEventListener("blur", resetComposeDraft)`,
-		`if (e.target === e.currentTarget) closeComposition()`,
+		`window.addEventListener("blur", retainOpenDraft)`,
+		`dispatchComposition({ type: "HIDE" })`,
 		`acceptTopSuggestion(e, scope, suggestions, setScope)`,
 		`Launch only — this palette never writes a binding.`,
 	} {
@@ -75,28 +75,90 @@ func TestPaletteBindinglessCompositionContract(t *testing.T) {
 
 // TestPaletteAdditionsRemainUserOwned guards the frontend half of the
 // additive-only property. Suggestions may fill datalists, but the only setter
-// paths for skills/prompts remain reset, append from typed additions, and
-// direct chip removal. Backend reflection tests separately ensure Binding has
-// no field from which either collection could be inherited.
+// paths for skills/prompts remain reducer actions dispatched by typed
+// additions and direct chip removal. Backend reflection tests separately
+// ensure Binding has no field from which either collection could be inherited.
 func TestPaletteAdditionsRemainUserOwned(t *testing.T) {
 	source := readRepoFile(t, "frontend", "src", "Palette.jsx")
-	for fragment, want := range map[string]int{
-		"setSkills(":  3,
-		"setPrompts(": 3,
-	} {
-		if got := strings.Count(source, fragment); got != want {
-			t.Errorf("Palette.jsx contains %d occurrences of %q; want %d user-owned setter paths", got, fragment, want)
-		}
-	}
 	for _, required := range []string{
-		`const [skills, setSkills] = useState([])`,
-		`const [prompts, setPrompts] = useState([])`,
-		`setSkills((cur) => [...cur, ...additions])`,
-		`setPrompts((cur) => [...cur, ...additions])`,
+		`dispatchComposition({ type: "ADD_SKILLS", values: additions })`,
+		`dispatchComposition({ type: "REMOVE_SKILL", value: name })`,
+		`dispatchComposition({ type: "ADD_PROMPTS", values: additions })`,
+		`dispatchComposition({ type: "REMOVE_PROMPT", value: name })`,
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("Palette.jsx is missing additive-only fragment %q", required)
 		}
+	}
+	for _, forbidden := range []string{
+		`skills: binding.`,
+		`skills: profile.`,
+		`prompts: binding.`,
+		`prompts: profile.`,
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("Palette.jsx contains inherited-addition path %q", forbidden)
+		}
+	}
+}
+
+// TestPaletteDraftLifecycleContract covers the DOM/native wiring around the
+// reducer's executable lifecycle tests. Passive backdrop clicks do nothing;
+// only the two plainly labelled actions clear state, and the retained marker
+// is rendered when native dismissal has hidden an open draft.
+func TestPaletteDraftLifecycleContract(t *testing.T) {
+	source := readRepoFile(t, "frontend", "src", "Palette.jsx")
+	for _, required := range []string{
+		`Draft retained while the palette was hidden`,
+		`Discard &amp; close`,
+		`dispatchComposition({ type: "DISCARD" })`,
+		`dispatchComposition({ type: "CLEAR" })`,
+		`if (activeCompositionLaunchRef.current !== draftId) return undefined`,
+		`dispatchComposition({ type: "LAUNCH_SUCCESS", draftId })`,
+		`type: "LAUNCH_FAILURE"`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("Palette.jsx is missing lifecycle fragment %q", required)
+		}
+	}
+
+	backdropStart := strings.Index(source, `className="compose-modal-backdrop"`)
+	if backdropStart < 0 {
+		t.Fatal("composition backdrop is missing")
+	}
+	backdropEnd := strings.Index(source[backdropStart:], `<section`)
+	if backdropEnd < 0 {
+		t.Fatal("could not isolate composition backdrop element")
+	}
+	if strings.Contains(source[backdropStart:backdropStart+backdropEnd], "onMouse") ||
+		strings.Contains(source[backdropStart:backdropStart+backdropEnd], "onClick") {
+		t.Error("composition backdrop still has a passive-click action")
+	}
+	if strings.Contains(source, `if (e.target === e.currentTarget)`) {
+		t.Error("composition backdrop still has a passive-click close path")
+	}
+}
+
+func TestDirectBindingLaunchStaysCompositionFree(t *testing.T) {
+	source := readRepoFile(t, "frontend", "src", "Palette.jsx")
+	start := strings.Index(source, "function launchBinding(name)")
+	if start < 0 {
+		t.Fatal("could not find launchBinding in Palette.jsx")
+	}
+	relEnd := strings.Index(source[start:], "function openBindingComposition")
+	if relEnd <= 0 {
+		t.Fatal("could not isolate launchBinding in Palette.jsx")
+	}
+	end := start + relEnd
+	direct := source[start:end]
+	if !strings.Contains(direct, "Launch.Binding(name)") {
+		t.Error("direct launch does not call Launch.Binding")
+	}
+	if strings.Contains(direct, "Composition") {
+		t.Error("direct launch reaches composition state or service")
+	}
+	if !strings.Contains(source, `launchBinding(activeTarget?.name)`) {
+		t.Error("search Enter is not wired to the direct saved-binding path")
 	}
 }
 
