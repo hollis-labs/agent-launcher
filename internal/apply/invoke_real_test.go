@@ -2,6 +2,8 @@ package apply_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,12 +16,16 @@ import (
 // scratchMakefile is agent-setup's real Makefile (~/dev/projects/agent-setup
 // /Makefile), copied here as a literal string -- not read from that repo at
 // test time, per this task's own standing rule that no test ever points at
-// the real agent-setup checkout or the real ~/.config/agents. It was
-// verified byte-for-byte identical against that file on 2026-09-04 (sha256
-// 610e1dce7fc8af9855e12006812c541e5992b70c625151c0edd7cbd5a22cddfe as of
-// that date) before this task began any work, and this string is what the
-// tests below actually exercise install-system's real recipe against --
-// three real rsyncs, not a stand-in.
+// the real agent-setup checkout or the real ~/.config/agents. This string is
+// what the tests below actually exercise install-system's real recipe
+// against -- three real rsyncs, not a stand-in.
+//
+// Staying in sync with the real file is enforced at test run time, not by a
+// comment someone has to remember to update: requireMake (below) hashes the
+// real ~/dev/projects/agent-setup/Makefile, if it's present on this machine,
+// and fails with both hashes and a re-sync instruction the moment this
+// constant drifts from it -- rather than letting every test in this package
+// keep passing against a silently stale recipe.
 const scratchMakefile = `.DEFAULT_GOAL := help
 SHELL := /bin/bash
 CAIRN ?= cairn
@@ -52,12 +58,64 @@ install-check: ## Diff the render against the real home. Writes nothing.
 
 lint: ## Shell syntax across the hooks
 	@for f in hooks/*.sh; do bash -n $$f && echo "  ok  $$f"; done
+
+# Every target above passes ` + "`" + `--profile .` + "`" + `: this directory is the catalog, and
+# cairn's default bundle (~/.config/agents) deliberately holds only the
+# templates, skills and prompts ` + "`" + `install-system` + "`" + ` stages there. The profiles are
+# not copied anywhere — a second copy is the thing the seeder was, and retiring it
+# was the point. Export CAIRN_PROFILE_ROOT to this checkout to boot without the
+# flag.
+#
+# ` + "`" + `cairn install` + "`" + ` with no --root writes the live ~/.claude and is human-executed,
+# permanently: an agent that runs it rewrites the configuration it is running
+# under, mid-session. There is deliberately no target for it.
 `
 
 func requireMake(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skipf("make not on PATH, skipping the real make install-system check: %v", err)
+	}
+	requireScratchMakefileMatchesReal(t)
+}
+
+// requireScratchMakefileMatchesReal is the actual drift detector: it reads
+// the real ~/dev/projects/agent-setup/Makefile -- read-only, never written
+// to, per this package's standing rule -- and fails loudly if its SHA-256
+// no longer matches scratchMakefile's. Without this, a change to the real
+// recipe (a flag on the rsync lines, a fourth staged directory, different
+// --delete-excluded semantics) would leave every test in this package
+// passing against a stale copy, silently. If the real file isn't present
+// on this machine at all, it skips rather than failing an environment that
+// legitimately doesn't have that checkout.
+func requireScratchMakefileMatchesReal(t *testing.T) {
+	t.Helper()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot locate home directory to find the real agent-setup Makefile: %v", err)
+	}
+	realPath := filepath.Join(home, "dev", "projects", "agent-setup", "Makefile")
+
+	real, err := os.ReadFile(realPath)
+	if os.IsNotExist(err) {
+		t.Skipf("real agent-setup checkout not present at %s, skipping drift check", realPath)
+		return
+	}
+	if err != nil {
+		t.Fatalf("reading real Makefile at %s to verify scratchMakefile is not stale: %v", realPath, err)
+	}
+
+	realSum := sha256.Sum256(real)
+	scratchSum := sha256.Sum256([]byte(scratchMakefile))
+	if realSum != scratchSum {
+		t.Fatalf(
+			"scratchMakefile in invoke_real_test.go has drifted from the real Makefile at %s.\n"+
+				"  real Makefile sha256:      %s\n"+
+				"  scratchMakefile sha256:    %s\n"+
+				"Re-copy %s's contents into the scratchMakefile constant.",
+			realPath, hex.EncodeToString(realSum[:]), hex.EncodeToString(scratchSum[:]), realPath,
+		)
 	}
 }
 
