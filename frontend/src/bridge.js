@@ -47,11 +47,19 @@ export const Manager = {
     callService(MANAGER_SERVICE, "NewArtifact", kind, id, name, description),
 };
 
-// Binding is internal/binding.Service: the bundle's bindings.yaml, read and
-// written through internal/binding.Store — see that package's doc for why a
-// binding's scope is always a path here, never one of bindings.yaml's own
-// scopes: alias names. Create and Update take a binding shaped
-// { name, profile, scope }.
+// Binding is internal/binding.Service: the bundle's bindings/ directory
+// (one file per binding), read and written through internal/binding.Store —
+// see that package's doc for why a binding's scope is always a path here,
+// never one of scopes.yaml's own alias names. Create and Update take a
+// binding shaped { name, profile, scope }.
+//
+// List()'s resolved value is a [ListResult]-shaped object — see
+// internal/binding.Service.List's own doc — not a bare array:
+// { bindings, state, path, detail }. state is one of "ok" | "missing" |
+// "unreadable"; bindings is only meaningful when state === "ok". This is
+// what lets Palette.jsx tell "genuinely no bindings yet" apart from "the
+// bundle root looks wrong" and "bindings/ exists but can't be read" — see
+// that component's own comment.
 export const Binding = {
   List: () => callService(BINDING_SERVICE, "List"),
   Create: (b) => callService(BINDING_SERVICE, "Create", b),

@@ -11,9 +11,28 @@ import { Binding, Launch, Shell } from "./bridge.js";
 // The compose form (CW-20260903-0017) and saving a composition as a new
 // binding (CW-20260903-0018) are further out still; this window only reads
 // bindings, it does not build or edit compositions.
+//
+// # Three empty states, not one (CW-20260904-0002 / T23)
+//
+// Binding.List() resolves to a [ListResult]-shaped object — see
+// internal/binding.Service.List's own doc — not a bare array:
+// { bindings, state, path, detail }, state one of "ok" | "missing" |
+// "unreadable". Before T23, an empty bundle, a wrong bundle root, and a
+// bundle whose bindings could not be read all rendered the same
+// unconditional "No bindings yet" — the exact falsely-reassuring copy that
+// had Chrispian asking whether he was *supposed* to have bindings when the
+// real answer was "this build can't read them." listResult below carries
+// enough for renderBody to tell all three apart and say which one is
+// actually true, naming the bundle path in the two states that are real
+// problems rather than a genuinely empty bundle.
 export default function Palette() {
-  const [bindings, setBindings] = useState(null); // null = loading
-  const [error, setError] = useState("");
+  // null = still loading. Once settled, either the resolved ListResult
+  // ({ bindings, state, path, detail }) or a synthetic { state: "error" }
+  // for the one case that isn't one of the three documented states: the
+  // active bundle root itself could not even be resolved (Binding.List()
+  // rejects rather than resolving — see internal/binding.Service.List's
+  // doc on when it returns a non-nil error instead of State).
+  const [listResult, setListResult] = useState(null);
   const [launchError, setLaunchError] = useState("");
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -26,22 +45,23 @@ export default function Palette() {
   useEffect(() => {
     let cancelled = false;
     Binding.List()
-      .then((list) => {
-        if (!cancelled) setBindings(list ?? []);
+      .then((result) => {
+        if (!cancelled) setListResult(result ?? { bindings: [], state: "ok", path: "" });
       })
       .catch((err) => {
-        if (!cancelled) setError(String(err?.message ?? err));
+        if (!cancelled) setListResult({ state: "error", detail: String(err?.message ?? err) });
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  const bindings = listResult?.state === "ok" ? listResult.bindings ?? [] : [];
+
   const filtered = useMemo(() => {
-    const list = bindings ?? [];
     const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((b) => b.name.toLowerCase().includes(q));
+    if (!q) return bindings;
+    return bindings.filter((b) => b.name.toLowerCase().includes(q));
   }, [bindings, query]);
 
   // The active row must stay in range as filtering shrinks or reorders the
@@ -97,48 +117,15 @@ export default function Palette() {
         </div>
       ) : null}
 
-      {error ? (
-        <div className="placeholder">
-          <div>
-            <div className="err">Couldn't load bindings</div>
-            <div className="muted" style={{ marginTop: 8 }}>{error}</div>
-          </div>
-        </div>
-      ) : bindings === null ? (
-        <div className="placeholder muted">Loading bindings…</div>
-      ) : filtered.length === 0 ? (
-        <div className="placeholder">
-          <div className="muted">
-            {bindings.length === 0 ? "No bindings yet" : "No bindings match your search"}
-          </div>
-        </div>
-      ) : (
-        <ul className="palette-list" role="listbox">
-          {filtered.map((b, i) => (
-            <li key={b.name}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={i === activeIndex}
-                className={"palette-row" + (i === activeIndex ? " active" : "")}
-                onMouseEnter={() => setActiveIndex(i)}
-                onClick={() => setActiveIndex(i)}
-              >
-                <span className="palette-row-name">{b.name}</span>
-                <span className="palette-row-profile">{b.profile}</span>
-                <span className="palette-row-scope">{b.scope}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {renderBody(listResult, filtered, activeIndex, setActiveIndex)}
 
-      {/* Persistent across every state (loading/error/empty/populated) —
-          CW-20260904-0004. Before this, "Open manager" only lived inside the
-          empty/error placeholders (see git history at e71f153 and the commit
-          that first rendered a populated <ul>), so a palette with bindings in
-          it had no path to the manager at all. This footer is the one
-          affordance now; the placeholders above no longer duplicate it. */}
+      {/* Persistent across every state (loading/error/missing/unreadable/
+          empty/populated) — CW-20260904-0004. Before this, "Open manager"
+          only lived inside the empty/error placeholders (see git history at
+          e71f153 and the commit that first rendered a populated <ul>), so a
+          palette with bindings in it had no path to the manager at all.
+          This footer is the one affordance now; the placeholders above no
+          longer duplicate it. */}
       <div className="palette-footer">
         <span className="muted">
           <kbd>Esc</kbd> dismisses · clicking away dismisses
@@ -148,5 +135,88 @@ export default function Palette() {
         </button>
       </div>
     </div>
+  );
+}
+
+// renderBody picks one of the palette's states. listResult is null while
+// still loading; once settled it is either the real ListResult
+// ({ bindings, state: "ok"|"missing"|"unreadable", path, detail }) or the
+// synthetic { state: "error", detail } Palette sets when Binding.List()
+// itself rejected. Each non-"ok" state gets its own honest copy, per this
+// task's own acceptance table — none of them collapse into "No bindings
+// yet", which is reserved for the one state where that is actually true.
+function renderBody(listResult, filtered, activeIndex, setActiveIndex) {
+  if (listResult === null) {
+    return <div className="placeholder muted">Loading bindings…</div>;
+  }
+
+  if (listResult.state === "error") {
+    return (
+      <div className="placeholder">
+        <div>
+          <div className="err">Couldn't load bindings</div>
+          <div className="muted" style={{ marginTop: 8 }}>{listResult.detail}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (listResult.state === "missing") {
+    return (
+      <div className="placeholder">
+        <div>
+          <div className="err">No bindings/ directory found</div>
+          <div className="muted" style={{ marginTop: 8 }}>
+            Nothing exists at <code>{listResult.path}</code>. Check that this is the right
+            bundle, or that it's been set up with Cairn.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (listResult.state === "unreadable") {
+    return (
+      <div className="placeholder">
+        <div>
+          <div className="err">Couldn't read bindings</div>
+          <div className="muted" style={{ marginTop: 8 }}>{listResult.detail}</div>
+        </div>
+      </div>
+    );
+  }
+
+  // state === "ok" from here down: a real, resolved bindings/ directory —
+  // possibly genuinely empty, which is the one case "No bindings yet" is
+  // actually true.
+  if (filtered.length === 0) {
+    return (
+      <div className="placeholder">
+        <div className="muted">
+          {(listResult.bindings ?? []).length === 0 ? "No bindings yet" : "No bindings match your search"}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <ul className="palette-list" role="listbox">
+      {filtered.map((b, i) => (
+        <li key={b.name}>
+          <button
+            type="button"
+            role="option"
+            aria-selected={i === activeIndex}
+            className={"palette-row" + (i === activeIndex ? " active" : "")}
+            onMouseEnter={() => setActiveIndex(i)}
+            onClick={() => setActiveIndex(i)}
+          >
+            <span className="palette-row-name">{b.name}</span>
+            <span className="palette-row-profile">{b.profile}</span>
+            <span className="palette-row-scope">{b.scope}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
