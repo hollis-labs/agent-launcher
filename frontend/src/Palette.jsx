@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Binding, Launch, Manager, Project, Shell } from "./bridge.js";
+import { acceptTopSuggestion } from "./autocomplete.js";
 
 // The palette lists the active bundle's bindings, filterable by name, and
 // lets the user move a selection over them with the mouse or the arrow
@@ -76,6 +77,7 @@ export default function Palette() {
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef(null);
   const baseProfileRef = useRef(null);
+  const partDraftRef = useRef(null);
 
   // The palette reads suggestion values from the same active bundle tree
   // the manager shows and the same Tachyon Projects registry the manager
@@ -90,11 +92,11 @@ export default function Palette() {
   const [suggestionErrors, setSuggestionErrors] = useState({});
 
   // --- compose-form draft state (CW-20260903-0017) -----------------------
-  // One shared draft, layered on top of whichever row is highlighted below
-  // — not per-binding state — since these are extra flags added to
-  // whatever target is chosen at launch time, not a property of any one
-  // row. See this file's own header comment for why `skills` in particular
-  // must never be seeded from anything but addSkill.
+  // One shared modal draft, layered on top of the binding captured when its
+  // Compose button was clicked — not per-binding state — since these are
+  // extra flags added at launch time, not a property of a row. See this
+  // file's own header comment for why `skills` in particular must never be
+  // seeded from anything but addSkill.
   const [skills, setSkills] = useState([]); // string[] — additive only
   const [skillDraft, setSkillDraft] = useState("");
   const [prompts, setPrompts] = useState([]); // string[] — additive only (CW-20260904-0006)
@@ -111,6 +113,8 @@ export default function Palette() {
   // selected and baseProfile is sent as CompositionInput.Target instead.
   const [bindingless, setBindingless] = useState(false);
   const [baseProfile, setBaseProfile] = useState("");
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeBinding, setComposeBinding] = useState("");
 
   useEffect(() => {
     document.body.classList.add("palette");
@@ -206,7 +210,7 @@ export default function Palette() {
     setActiveIndex((i) => (filtered.length === 0 ? 0 : Math.min(i, filtered.length - 1)));
   }, [filtered.length]);
 
-  const activeTarget = bindingless ? null : filtered[activeIndex] ?? null;
+  const activeTarget = filtered[activeIndex] ?? null;
 
   const catalog = useMemo(
     () => Object.fromEntries((catalogTree?.groups ?? []).map((group) => [group.kind, (group.nodes ?? []).map((node) => node.id)])),
@@ -241,6 +245,7 @@ export default function Palette() {
   // is fixing (a stale draft can reach a later launch), not a new
   // regression — so this is a strict improvement even if imperfect.
   function resetComposeDraft() {
+    setLaunchError("");
     setSkills([]);
     setSkillDraft("");
     setPrompts([]);
@@ -253,6 +258,8 @@ export default function Palette() {
     setSetValueDraft("");
     setBaseProfile("");
     setBindingless(false);
+    setComposeOpen(false);
+    setComposeBinding("");
   }
 
   useEffect(() => {
@@ -260,10 +267,10 @@ export default function Palette() {
     return () => window.removeEventListener("blur", resetComposeDraft);
   }, []);
 
-  // attemptLaunch sends either the highlighted binding or the explicitly
-  // entered bare profile plus the full compose draft through
-  // Launch.Composition. It is the one place this component calls Launch.*
-  // — every field's Enter handler either commits pending
+  // attemptLaunch sends either the binding captured by the modal, the
+  // highlighted binding used by search+Enter, or the explicitly entered
+  // bare profile plus the full compose draft through Launch.Composition.
+  // Every field's Enter handler either commits pending
   // text into the draft (skills/parts/sets — see each control below) or,
   // when there is nothing pending to commit, falls through to this
   // function, so "press Enter" always either builds the composition
@@ -271,7 +278,7 @@ export default function Palette() {
   // person did not ask for.
   function attemptLaunch() {
     if (launching) return;
-    const target = bindingless ? baseProfile.trim() : activeTarget?.name;
+    const target = bindingless ? baseProfile.trim() : composeOpen ? composeBinding : activeTarget?.name;
     if (!target) return;
     setLaunchError("");
     setLaunching(true);
@@ -306,6 +313,32 @@ export default function Palette() {
       .finally(() => setLaunching(false));
   }
 
+  // A double-click is the fastest path through the palette and is kept
+  // deliberately separate from composition: it launches the saved binding
+  // by name through Launch.Binding and therefore cannot accidentally carry
+  // a stale part, skill, prompt, scope, or set from the modal draft.
+  function launchBinding(name) {
+    if (launching || !name) return;
+    setLaunchError("");
+    setLaunching(true);
+    Launch.Binding(name)
+      .then(() => {
+        resetComposeDraft();
+        return Shell.HidePalette();
+      })
+      .catch((err) => setLaunchError(String(err?.message ?? err)))
+      .finally(() => setLaunching(false));
+  }
+
+  function openBindingComposition(index, name) {
+    resetComposeDraft();
+    setActiveIndex(index);
+    setComposeBinding(name);
+    setComposeOpen(true);
+    setLaunchError("");
+    requestAnimationFrame(() => partDraftRef.current?.focus());
+  }
+
   // This is a NEW draft, per T33: opening it clears any additions that were
   // being composed over a selected binding. resetComposeDraft still owns
   // today's dismissal behavior; T30 owns whether that function is called on
@@ -313,8 +346,14 @@ export default function Palette() {
   function openBindinglessComposition() {
     resetComposeDraft();
     setBindingless(true);
+    setComposeOpen(true);
     setLaunchError("");
     requestAnimationFrame(() => baseProfileRef.current?.focus());
+  }
+
+  function closeComposition() {
+    resetComposeDraft();
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   // addSkills splits raw on commas (--skill's own "comma-separated and
@@ -422,19 +461,13 @@ export default function Palette() {
       />
 
       <div className="palette-modebar">
-        <span className="muted">
-          {bindingless ? "One-time composition — nothing will be saved" : "Start from a profile instead of a saved binding"}
-        </span>
-        <button
-          type="button"
-          className={bindingless ? "active" : ""}
-          onClick={openBindinglessComposition}
-        >
+        <span className="muted">Double-click a binding to launch it directly</span>
+        <button type="button" onClick={openBindinglessComposition} disabled={launching}>
           New one-time composition
         </button>
       </div>
 
-      {launchError ? (
+      {launchError && !composeOpen ? (
         <div className="err" style={{ padding: "8px 14px" }}>
           Couldn't launch: {launchError}
         </div>
@@ -444,59 +477,64 @@ export default function Palette() {
         {renderBody(
           listResult,
           filtered,
-          bindingless ? -1 : activeIndex,
+          activeIndex,
           (index) => {
-            setBindingless(false);
-            setBaseProfile("");
             setActiveIndex(index);
             setLaunchError("");
           },
-          bindingless ? () => {} : setActiveIndex,
+          setActiveIndex,
+          openBindingComposition,
+          launchBinding,
+          launching,
         )}
-
-        {bindingless || activeTarget ? (
-          <ComposeSection
-            bindingless={bindingless}
-            targetName={bindingless ? baseProfile.trim() : activeTarget.name}
-            baseProfile={baseProfile}
-            setBaseProfile={setBaseProfile}
-            baseProfileRef={baseProfileRef}
-            profileSuggestions={profileSuggestions}
-            skillSuggestions={skillSuggestions}
-            promptSuggestions={promptSuggestions}
-            projectSuggestions={projectSuggestions}
-            suggestionErrors={suggestionErrors}
-            launching={launching}
-            skills={skills}
-            skillDraft={skillDraft}
-            setSkillDraft={setSkillDraft}
-            addSkills={addSkills}
-            removeSkill={removeSkill}
-            prompts={prompts}
-            promptDraft={promptDraft}
-            setPromptDraft={setPromptDraft}
-            addPrompts={addPrompts}
-            removePrompt={removePrompt}
-            scope={scope}
-            setScope={setScope}
-            parts={parts}
-            partDraft={partDraft}
-            setPartDraft={setPartDraft}
-            addPart={addPart}
-            removePart={removePart}
-            movePart={movePart}
-            sets={sets}
-            setSlotDraft={setSlotDraft}
-            setSetSlotDraft={setSetSlotDraft}
-            setValueDraft={setValueDraft}
-            setSetValueDraft={setSetValueDraft}
-            addSet={addSet}
-            removeSet={removeSet}
-            onDraftEnter={onDraftEnter}
-            attemptLaunch={attemptLaunch}
-          />
-        ) : null}
       </div>
+
+      {composeOpen && (bindingless || composeBinding) ? (
+        <ComposeSection
+          bindingless={bindingless}
+          targetName={bindingless ? baseProfile.trim() : composeBinding}
+          baseProfile={baseProfile}
+          setBaseProfile={setBaseProfile}
+          baseProfileRef={baseProfileRef}
+          partDraftRef={partDraftRef}
+          profileSuggestions={profileSuggestions}
+          skillSuggestions={skillSuggestions}
+          promptSuggestions={promptSuggestions}
+          projectSuggestions={projectSuggestions}
+          suggestionErrors={suggestionErrors}
+          launchError={launchError}
+          launching={launching}
+          skills={skills}
+          skillDraft={skillDraft}
+          setSkillDraft={setSkillDraft}
+          addSkills={addSkills}
+          removeSkill={removeSkill}
+          prompts={prompts}
+          promptDraft={promptDraft}
+          setPromptDraft={setPromptDraft}
+          addPrompts={addPrompts}
+          removePrompt={removePrompt}
+          scope={scope}
+          setScope={setScope}
+          parts={parts}
+          partDraft={partDraft}
+          setPartDraft={setPartDraft}
+          addPart={addPart}
+          removePart={removePart}
+          movePart={movePart}
+          sets={sets}
+          setSlotDraft={setSlotDraft}
+          setSetSlotDraft={setSetSlotDraft}
+          setValueDraft={setValueDraft}
+          setSetValueDraft={setSetValueDraft}
+          addSet={addSet}
+          removeSet={removeSet}
+          onDraftEnter={onDraftEnter}
+          acceptTopSuggestion={acceptTopSuggestion}
+          attemptLaunch={attemptLaunch}
+          closeComposition={closeComposition}
+        />
+      ) : null}
 
       {/* Persistent across every state (loading/error/missing/unreadable/
           empty/populated) — CW-20260904-0004. Before this, "Open manager"
@@ -533,11 +571,13 @@ function ComposeSection(props) {
     baseProfile,
     setBaseProfile,
     baseProfileRef,
+    partDraftRef,
     profileSuggestions,
     skillSuggestions,
     promptSuggestions,
     projectSuggestions,
     suggestionErrors,
+    launchError,
     launching,
     skills,
     skillDraft,
@@ -565,15 +605,66 @@ function ComposeSection(props) {
     addSet,
     removeSet,
     onDraftEnter,
+    acceptTopSuggestion,
     attemptLaunch,
+    closeComposition,
   } = props;
 
+  const modalRef = useRef(null);
+  const trapModalTab = (event) => {
+    if (
+      event.key !== "Tab" || event.defaultPrevented || event.ctrlKey ||
+      event.altKey || event.metaKey || event.isComposing ||
+      event.nativeEvent?.isComposing
+    ) return;
+    const focusable = modalRef.current?.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    if (!focusable?.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
-    <div className="compose-section">
-      <div className="compose-heading">
-        {bindingless ? "One-time composition" : "Compose additions for"}{" "}
-        <span className="compose-target">{bindingless ? targetName || "a profile" : targetName}</span>
-      </div>
+    <div
+      className="compose-modal-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) closeComposition();
+      }}
+    >
+      <section
+        ref={modalRef}
+        className="compose-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="compose-modal-title"
+        onKeyDown={trapModalTab}
+      >
+        <header className="compose-modal-header">
+          <div>
+            <div className="compose-heading" id="compose-modal-title">
+              {bindingless ? "One-time composition" : "Compose additions for"}
+            </div>
+            <div className="compose-modal-target">
+              {bindingless ? targetName || "Choose a base profile" : targetName}
+            </div>
+          </div>
+          <button type="button" className="compose-modal-close" onClick={closeComposition} aria-label="Close composition">
+            ×
+          </button>
+        </header>
+
+        <div className="compose-modal-body">
+          {launchError ? <div className="err">Couldn't launch: {launchError}</div> : null}
+
+          <div className="compose-section">
 
       {bindingless ? (
         <div className="compose-field compose-base-profile">
@@ -591,6 +682,7 @@ function ComposeSection(props) {
               setBaseProfile(e.target.value);
             }}
             onKeyDown={(e) => {
+              if (acceptTopSuggestion(e, baseProfile, profileSuggestions, setBaseProfile)) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 attemptLaunch();
@@ -610,12 +702,14 @@ function ComposeSection(props) {
         <label htmlFor="compose-part-input">Additional parts (--with)</label>
         <input
           id="compose-part-input"
+          ref={partDraftRef}
           list="compose-part-suggestions"
           placeholder="a catalog id or path — Enter to add"
           spellCheck={false}
           value={partDraft}
           onChange={(e) => setPartDraft(e.target.value)}
           onKeyDown={(e) => {
+            if (acceptTopSuggestion(e, partDraft, profileSuggestions, setPartDraft)) return;
             if (e.key === "Backspace" && partDraft === "" && parts.length > 0) {
               removePart(parts[parts.length - 1]);
               return;
@@ -676,6 +770,7 @@ function ComposeSection(props) {
           value={skillDraft}
           onChange={(e) => setSkillDraft(e.target.value)}
           onKeyDown={(e) => {
+            if (acceptTopSuggestion(e, skillDraft, skillSuggestions, setSkillDraft)) return;
             if (e.key === "Backspace" && skillDraft === "" && skills.length > 0) {
               removeSkill(skills[skills.length - 1]);
               return;
@@ -724,6 +819,7 @@ function ComposeSection(props) {
           value={promptDraft}
           onChange={(e) => setPromptDraft(e.target.value)}
           onKeyDown={(e) => {
+            if (acceptTopSuggestion(e, promptDraft, promptSuggestions, setPromptDraft)) return;
             if (e.key === "Backspace" && promptDraft === "" && prompts.length > 0) {
               removePrompt(prompts[prompts.length - 1]);
               return;
@@ -821,6 +917,11 @@ function ComposeSection(props) {
           value={scope}
           onChange={(e) => setScope(e.target.value)}
           onKeyDown={(e) => {
+            const suggestions = projectSuggestions.map((project) => ({
+              value: project.path,
+              search: [project.name],
+            }));
+            if (acceptTopSuggestion(e, scope, suggestions, setScope)) return;
             if (e.key === "Enter") {
               e.preventDefault();
               attemptLaunch();
@@ -842,12 +943,16 @@ function ComposeSection(props) {
         </div>
       ) : null}
 
-      <div className="compose-launch-row">
-        <span className="muted">Launch only — this palette never writes a binding.</span>
-        <button type="button" onClick={attemptLaunch} disabled={launching || !targetName}>
-          {launching ? "Launching…" : "Launch composition"}
-        </button>
-      </div>
+          </div>
+        </div>
+
+        <footer className="compose-modal-footer">
+          <span className="muted">Launch only — this palette never writes a binding.</span>
+          <button type="button" onClick={attemptLaunch} disabled={launching || !targetName}>
+            {launching ? "Launching…" : "Launch composition"}
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -859,7 +964,7 @@ function ComposeSection(props) {
 // itself rejected. Each non-"ok" state gets its own honest copy, per this
 // task's own acceptance table — none of them collapse into "No bindings
 // yet", which is reserved for the one state where that is actually true.
-function renderBody(listResult, filtered, activeIndex, onSelect, onHover) {
+function renderBody(listResult, filtered, activeIndex, onSelect, onHover, onCompose, onLaunch, launching) {
   if (listResult === null) {
     return <div className="placeholder muted">Loading bindings…</div>;
   }
@@ -916,18 +1021,28 @@ function renderBody(listResult, filtered, activeIndex, onSelect, onHover) {
   return (
     <ul className="palette-list" role="listbox">
       {filtered.map((b, i) => (
-        <li key={b.name}>
+        <li key={b.name} className={"palette-row" + (i === activeIndex ? " active" : "")}>
           <button
             type="button"
             role="option"
             aria-selected={i === activeIndex}
-            className={"palette-row" + (i === activeIndex ? " active" : "")}
+            className="palette-row-main"
             onMouseEnter={() => onHover(i)}
             onClick={() => onSelect(i)}
+            onDoubleClick={() => onLaunch(b.name)}
+            disabled={launching}
           >
             <span className="palette-row-name">{b.name}</span>
             <span className="palette-row-profile">{b.profile}</span>
             <span className="palette-row-scope">{b.scope}</span>
+          </button>
+          <button
+            type="button"
+            className="palette-row-compose"
+            onClick={() => onCompose(i, b.name)}
+            disabled={launching}
+          >
+            Compose
           </button>
         </li>
       ))}

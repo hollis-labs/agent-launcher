@@ -6,7 +6,20 @@
   --accent: #45c7b8;
   --line: #262a31;
 }
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  /* Scrolling remains available by wheel, trackpad, keyboard and touch;
+     Tachyon hides the chrome unless a view explicitly opts back in. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
 html, body, #root { height: 100%; }
 html, body {
   /* Frameless Wails/Cocoa panels (the palette) are movableByWindowBackground
@@ -71,17 +84,12 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   background: #172521;
 }
 
-/* palette-scroll wraps the list AND the compose form (CW-20260903-0017) in
-   one scrolling region between the search input and the footer, so the two
-   share whatever vertical space the window gives them instead of each
-   claiming its own flex:1 slice (which would starve the compose form
-   whenever the list is tall). Stops scroll chaining at its own boundary —
-   see .palette-list's own older comment on why, still the same reasoning,
-   just moved up one level since this element is now the one that scrolls. */
+/* The binding list owns the available middle of the palette. Composition is
+   now isolated in a modal rather than competing with the list for height. */
 .palette-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
@@ -98,25 +106,46 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
 }
 
 .palette-list {
-  flex-shrink: 0;
-  max-height: 168px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   list-style: none;
 }
 .palette-row {
   display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px 4px 2px 0;
+  border-radius: 6px;
+}
+.palette-row.active { background: #202632; }
+.palette-row-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
   align-items: baseline;
   gap: 10px;
-  width: 100%;
+  padding: 6px 8px 6px 10px;
   text-align: left;
-  padding: 8px 10px;
   background: none;
   border: none;
-  border-radius: 6px;
   color: var(--fg);
   cursor: pointer;
 }
-.palette-row.active { background: #202632; }
+.palette-row-main:hover { border-color: transparent; }
+.palette-row-main:disabled { cursor: wait; opacity: 0.6; }
+.palette-row-compose {
+  flex-shrink: 0;
+  padding: 3px 7px;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: rgba(16, 17, 21, 0.5);
+}
+.palette-row:hover .palette-row-compose,
+.palette-row.active .palette-row-compose {
+  color: var(--accent);
+}
 .palette-row-name { font-size: 13px; }
 .palette-row-profile {
   font-size: 11px;
@@ -150,8 +179,85 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
 }
 .palette-footer button { font-size: 11px; padding: 4px 10px; }
 
-/* --- Compose form (CW-20260903-0017): one control per Cairn flag beyond
-   the target already chosen from the list above. --- */
+/* --- Composition modal: one control per Cairn flag beyond the target. --- */
+.compose-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(5, 6, 8, 0.72);
+}
+.compose-modal {
+  width: min(600px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #14171c;
+  border: 1px solid #343a44;
+  border-radius: 10px;
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.5);
+}
+.compose-modal-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.compose-modal-target {
+  margin-top: 3px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+.compose-modal-close {
+  padding: 1px 7px 3px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+.compose-modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px;
+}
+.compose-modal-body .compose-section {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+.compose-modal-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px;
+  border-top: 1px solid var(--line);
+  background: #101318;
+  font-size: 10.5px;
+}
+.compose-modal-footer button {
+  flex-shrink: 0;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.compose-modal-footer button:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: default;
+}
 .compose-section {
   flex-shrink: 0;
   margin-top: 12px;
@@ -167,7 +273,6 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.compose-target { color: var(--accent); font-style: normal; }
 .compose-field { display: flex; flex-direction: column; gap: 5px; }
 .compose-base-profile {
   padding-left: 10px;
@@ -234,30 +339,6 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   font-size: 10.5px;
   line-height: 1.45;
 }
-.compose-launch-row {
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 0 2px;
-  background: rgba(16, 17, 21, 0.96);
-  font-size: 10.5px;
-}
-.compose-launch-row button {
-  flex-shrink: 0;
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 600;
-}
-.compose-launch-row button:disabled {
-  border-color: var(--line);
-  color: var(--muted);
-  opacity: 0.55;
-  cursor: default;
-}
-
 .manager-shell { height: 100%; display: flex; flex-direction: column; }
 .manager-shell header {
   display: flex;

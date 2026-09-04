@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { BindingComposer as ComposerAPI, Shell } from "./bridge.js";
+import { acceptTopSuggestion } from "./autocomplete.js";
 
 function AdditiveField({ label, hint, values, setValues, suggestions }) {
   const [draft, setDraft] = useState("");
@@ -18,7 +19,10 @@ function AdditiveField({ label, hint, values, setValues, suggestions }) {
           value={draft}
           list={listID}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          onKeyDown={(e) => {
+            if (acceptTopSuggestion(e, draft, suggestions, setDraft)) return;
+            if (e.key === "Enter") { e.preventDefault(); add(); }
+          }}
           placeholder={`Add ${label.toLowerCase().replace(/s$/, "")}`}
         />
         <datalist id={listID}>{suggestions.map((v) => <option key={v} value={v} />)}</datalist>
@@ -105,7 +109,13 @@ export default function BindingComposer({ tree, projects, projectError, onSaved 
       </div>
       <div className="binding-composer-field">
         <label>Base profile <span>profile</span></label>
-        <input value={profile} list="composer-profiles" onChange={(e) => setProfile(e.target.value)} placeholder="engineer" />
+        <input
+          value={profile}
+          list="composer-profiles"
+          onChange={(e) => setProfile(e.target.value)}
+          onKeyDown={(e) => acceptTopSuggestion(e, profile, profiles, setProfile)}
+          placeholder="engineer"
+        />
         <datalist id="composer-profiles">{profiles.map((v) => <option key={v} value={v} />)}</datalist>
       </div>
       <AdditiveField label="Parts" hint="ordered · --with" values={parts} setValues={setParts} suggestions={profiles} />
@@ -115,7 +125,18 @@ export default function BindingComposer({ tree, projects, projectError, onSaved 
       <div className="binding-composer-field">
         <label>Scope <span>literal path</span></label>
         <div className="binding-composer-scope-row">
-          <input value={scope} list="composer-projects" onChange={(e) => setScope(e.target.value)} placeholder="Paste or type a path" />
+          <input
+            value={scope}
+            list="composer-projects"
+            onChange={(e) => setScope(e.target.value)}
+            onKeyDown={(e) => acceptTopSuggestion(
+              e,
+              scope,
+              (projects ?? []).map((view) => ({ value: view.project.path, search: [view.project.name] })),
+              setScope,
+            )}
+            placeholder="Paste or type a path"
+          />
           <datalist id="composer-projects">{(projects ?? []).map((view) => <option key={view.project.name} value={view.project.path}>{view.project.name}</option>)}</datalist>
           <button type="button" onClick={pickScope}>Choose folder…</button>
         </div>
