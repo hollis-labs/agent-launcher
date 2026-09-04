@@ -1,0 +1,4 @@
+# A leading comment describing this particular binding -- must survive an
+# edit through this package.
+profile: planner
+scope: home

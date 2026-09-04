@@ -5,23 +5,24 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 )
 
-// TestLiveBundleBindingsCensus is the acceptance test for CW-20260903-0011's
-// read side: enumerate ~/dev/projects/agent-setup/bindings.yaml for real,
-// through the same Service path the palette calls, and confirm every one of
+// TestLiveBundleBindingsCensus is the acceptance test for CW-20260904-0002's
+// (T23) read side: enumerate ~/dev/projects/agent-setup/bindings/ for real,
+// through the same Store path the palette calls, and confirm every one of
 // the eight live bindings surfaces with a resolved path — never a
-// scopes: alias key — as its scope.
+// scopes.yaml alias key — as its scope.
 //
 // Skipped unless TACHYON_LIVE_BUNDLE is set, matching internal/bundle and
 // internal/manager's identical gate: the suite must not depend on, or ever
 // touch by default, a git repo Chrispian edits for real. This test is
-// read-only; it fingerprints bindings.yaml before and after and fails if a
-// single byte moved.
+// read-only; it fingerprints the whole bindings/ directory (and
+// scopes.yaml) before and after and fails if a single byte moved.
 //
 //	TACHYON_LIVE_BUNDLE=1 go test ./internal/binding/ -run TestLiveBundleBindingsCensus -v
 func TestLiveBundleBindingsCensus(t *testing.T) {
@@ -29,12 +30,13 @@ func TestLiveBundleBindingsCensus(t *testing.T) {
 		t.Skip("set TACHYON_LIVE_BUNDLE=1 to read the real bundle; the suite reads testdata/ by default")
 	}
 	root := liveRoot(t)
-	path := filepath.Join(root, "bindings.yaml")
-	t.Logf("bindings file: %s", path)
+	dir := filepath.Join(root, "bindings")
+	scopesPath := filepath.Join(root, "scopes.yaml")
+	t.Logf("bindings dir: %s", dir)
 
-	before := hashFile(t, path)
+	before := hashPaths(t, dir, scopesPath)
 
-	s := binding.NewFileStore(path)
+	s := binding.NewFileStore(dir)
 	got, err := s.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -43,11 +45,11 @@ func TestLiveBundleBindingsCensus(t *testing.T) {
 	const wantCount = 8
 	if len(got) != wantCount {
 		t.Errorf("List returned %d bindings; want %d: %+v"+
-			"; if the live file has genuinely changed, that is not a defect in this package — update this test",
+			"; if the live bundle has genuinely changed, that is not a defect in this package — update this test",
 			len(got), wantCount, got)
 	}
 
-	aliasKeys, err := liveAliasKeys(path)
+	aliasKeys, err := liveAliasKeys(scopesPath)
 	if err != nil {
 		t.Fatalf("reading alias keys for the leak check: %v", err)
 	}
@@ -57,30 +59,32 @@ func TestLiveBundleBindingsCensus(t *testing.T) {
 			t.Errorf("binding %+v has an empty field", b)
 		}
 		if aliasKeys[b.Scope] {
-			t.Errorf("binding %q surfaced a raw scopes: alias key as its scope: %q", b.Name, b.Scope)
+			t.Errorf("binding %q surfaced a raw scopes.yaml alias key as its scope: %q", b.Name, b.Scope)
 		}
 	}
 
-	if after := hashFile(t, path); after != before {
-		t.Fatalf("bindings.yaml changed across a read-only List():\nbefore %s\nafter  %s", before, after)
+	if after := hashPaths(t, dir, scopesPath); after != before {
+		t.Fatalf("the live bindings/ directory changed across a read-only List():\nbefore %s\nafter  %s", before, after)
 	}
-	t.Logf("bindings.yaml fingerprint unchanged: %s", before)
+	t.Logf("bindings/ fingerprint unchanged: %s", before)
 }
 
 // TestLiveBundleCreateDeleteRoundTrip is the acceptance test for
-// CW-20260903-0011's write side, run directly against the live bundle: create
-// one throwaway binding through this package's own Create, verify it is
-// visible through List/Get, delete it through this package's own Delete, and
-// confirm the file returns to its exact original bytes — proven by a
-// SHA-256 fingerprint taken immediately before Create and compared after
-// Delete, the same discipline TestCreateThenDeleteIsExactInverse establishes
-// against the fixture in filestore_test.go.
+// CW-20260904-0002's write side, run directly against the live bundle:
+// create one throwaway binding file through this package's own Create,
+// verify it is visible through List/Get, delete it through this package's
+// own Delete, and confirm the directory returns to its exact original
+// contents — proven by a SHA-256 fingerprint taken immediately before
+// Create and compared after Delete, the same discipline
+// TestCreateThenDeleteLeavesNoTrace establishes against the fixture in
+// filestore_test.go.
 //
 // Skipped unless TACHYON_LIVE_BUNDLE is set. If this test ever fails after
-// the Create half has already run, DO NOT leave it: cd into the bundle root,
-// run `git status --porcelain` and `git diff`, and `git checkout -- bindings.yaml`
-// to restore it — then treat the failure as a real bug in this package, not
-// something to route around.
+// the Create half has already run, DO NOT leave it: cd into the bundle
+// root, run `git status --porcelain` and `git diff`, and remove the
+// leftover bindings/tachyon-t23-roundtrip-probe.yaml file by hand — then
+// treat the failure as a real bug in this package, not something to route
+// around.
 //
 //	TACHYON_LIVE_BUNDLE=1 go test ./internal/binding/ -run TestLiveBundleCreateDeleteRoundTrip -v
 func TestLiveBundleCreateDeleteRoundTrip(t *testing.T) {
@@ -88,23 +92,24 @@ func TestLiveBundleCreateDeleteRoundTrip(t *testing.T) {
 		t.Skip("set TACHYON_LIVE_BUNDLE=1 to round-trip the real bundle; the suite reads testdata/ by default")
 	}
 	root := liveRoot(t)
-	path := filepath.Join(root, "bindings.yaml")
-	t.Logf("bindings file: %s", path)
+	dir := filepath.Join(root, "bindings")
+	scopesPath := filepath.Join(root, "scopes.yaml")
+	t.Logf("bindings dir: %s", dir)
 
-	before := hashFile(t, path)
+	before := hashPaths(t, dir, scopesPath)
 
-	s := binding.NewFileStore(path)
+	s := binding.NewFileStore(dir)
 	probe := binding.Binding{
-		Name:    "tachyon-t07-roundtrip-probe",
+		Name:    "tachyon-t23-roundtrip-probe",
 		Profile: "engineer",
-		Scope:   "~/dev/projects/tachyon-t07-roundtrip-probe-does-not-exist",
+		Scope:   "~/dev/projects/tachyon-t23-roundtrip-probe-does-not-exist",
 	}
 
 	if err := s.Create(probe); err != nil {
 		t.Fatalf("Create(%s): %v", probe.Name, err)
 	}
-	t.Logf("created %s — if this test fails from here on, clean it up by hand: "+
-		"git -C %s checkout -- bindings.yaml", probe.Name, root)
+	t.Logf("created %s — if this test fails from here on, clean it up by hand: rm %s",
+		probe.Name, filepath.Join(dir, probe.Name+".yaml"))
 
 	got, err := s.Get(probe.Name)
 	if err != nil {
@@ -129,19 +134,15 @@ func TestLiveBundleCreateDeleteRoundTrip(t *testing.T) {
 	}
 
 	if err := s.Delete(probe.Name); err != nil {
-		t.Fatalf("Delete(%s): %v — the probe entry is still in bindings.yaml, clean it up by hand", probe.Name, err)
+		t.Fatalf("Delete(%s): %v — the probe file is still on disk, clean it up by hand", probe.Name, err)
 	}
 
-	if _, err := s.Get(probe.Name); err == nil {
-		t.Fatalf("Get(%s) after Delete still succeeds", probe.Name)
-	}
-
-	after := hashFile(t, path)
+	after := hashPaths(t, dir, scopesPath)
 	if after != before {
-		t.Fatalf("bindings.yaml did not return to its original bytes after create+delete:\n"+
+		t.Fatalf("bindings/ did not return to its original contents after create+delete:\n"+
 			"before %s\nafter  %s\nCheck git status/git diff in %s immediately.", before, after, root)
 	}
-	t.Logf("bindings.yaml fingerprint restored: %s", before)
+	t.Logf("bindings/ fingerprint restored: %s", before)
 }
 
 func liveRoot(t *testing.T) string {
@@ -161,46 +162,65 @@ func liveRoot(t *testing.T) string {
 	return abs
 }
 
-func hashFile(t *testing.T, path string) string {
+// hashPaths fingerprints scopesPath plus every file directly under dir, so
+// a live test can prove nothing moved across a read-only call or a
+// create+delete round trip.
+func hashPaths(t *testing.T, dir, scopesPath string) string {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
+	type entry struct {
+		name string
+		sum  [32]byte
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	var entries []entry
+	add := func(name, path string) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return
+			}
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		entries = append(entries, entry{name: name, sum: sha256.Sum256(data)})
+	}
+	add("scopes.yaml", scopesPath)
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dir, err)
+	}
+	for _, e := range dirEntries {
+		if e.IsDir() {
+			continue
+		}
+		add(e.Name(), filepath.Join(dir, e.Name()))
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
+	h := sha256.New()
+	for _, e := range entries {
+		h.Write([]byte(e.name))
+		h.Write([]byte{0})
+		h.Write(e.sum[:])
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
-// liveAliasKeys re-reads bindings.yaml's own scopes: keys directly (not
-// through binding.Store, which never exposes them) so the census test can
-// assert that no returned Scope equals one. It reuses nothing internal to
-// the package on purpose: an independent read is a stronger check for this
-// one property than trusting the same code path being tested.
+// liveAliasKeys re-reads scopes.yaml's own keys directly (not through
+// binding.Store, which never exposes them) so the census test can assert
+// that no returned Scope equals one. It reuses nothing internal to the
+// package on purpose: an independent read is a stronger check for this one
+// property than trusting the same code path being tested.
 func liveAliasKeys(path string) (map[string]bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	keys := map[string]bool{}
-	inScopes := false
 	for _, raw := range splitOnNewline(string(data)) {
-		if raw == "" {
+		if raw == "" || raw[0] == '#' || raw[0] == ' ' || raw[0] == '\t' {
 			continue
 		}
-		if raw[0] != ' ' && raw[0] != '\t' {
-			inScopes = raw == "scopes:"
-			continue
-		}
-		if !inScopes {
-			continue
-		}
-		line := raw[2:]
-		if line == "" || line[0] == ' ' || line[0] == '#' {
-			continue
-		}
-		for i := 0; i < len(line); i++ {
-			if line[i] == ':' {
-				keys[line[:i]] = true
+		for i := 0; i < len(raw); i++ {
+			if raw[i] == ':' {
+				keys[raw[:i]] = true
 				break
 			}
 		}

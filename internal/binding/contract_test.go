@@ -2,6 +2,7 @@ package binding_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -11,14 +12,31 @@ import (
 // TestStoreContract is the acceptance proof that "swapping the storage
 // format is a one-file change": one behavioral test suite, runContract,
 // executed against two independent [binding.Store] implementations — the
-// real bindings.yaml-backed [binding.FileStore] and the trivial in-memory
-// [binding.MemStore]. Nothing in runContract knows or cares which one it was
-// handed; only this function's two subtests differ, in exactly one line
-// each — the constructor. That is the whole claim demonstrated, not merely
-// asserted in a comment.
+// real bindings/-directory-backed [binding.FileStore] and the trivial
+// in-memory [binding.MemStore]. Nothing in runContract knows or cares which
+// one it was handed; only this function's two subtests differ, in exactly
+// one line each — the constructor. That is the whole claim demonstrated,
+// not merely asserted in a comment.
+//
+// The FileStore subtest's one setup line creates its bindings/ directory
+// before handing it to runContract, unlike this test's old, single-shared-
+// file-backed version (which relied on a missing file behaving exactly
+// like an empty one). That is a deliberate, narrow adaptation to what "a
+// fresh store" means for this [binding.Store] now that a genuinely absent
+// bindings/ directory is its own, different, meaningful state — see
+// [binding.ErrBindingsDirMissing] and doc.go's "the directory's own
+// existence is real information" — not a change to runContract's own
+// assertions, which are untouched: a *present, empty* directory is still
+// required to behave exactly like [binding.MemStore]'s own fresh, empty
+// map, which is what this subtest now sets up explicitly instead of
+// leaving implicit.
 func TestStoreContract(t *testing.T) {
 	t.Run("FileStore", func(t *testing.T) {
-		runContract(t, binding.NewFileStore(filepath.Join(t.TempDir(), "bindings.yaml")))
+		dir := filepath.Join(t.TempDir(), "bindings")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+		runContract(t, binding.NewFileStore(dir))
 	})
 	t.Run("MemStore", func(t *testing.T) {
 		runContract(t, binding.NewMemStore(nil))

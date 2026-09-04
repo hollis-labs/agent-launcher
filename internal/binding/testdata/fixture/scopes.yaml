@@ -1,0 +1,3 @@
+# Fixture scope aliases.
+home: ~/dev/home
+tool: ~/dev/projects/tool

@@ -1,0 +1,4 @@
+# The conductor holds no scope. It is pointed at the launchpad because a
+# session has to start somewhere, not because the work lives there.
+profile: conductor
+scope: chrispian
