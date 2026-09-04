@@ -5,6 +5,7 @@ import { base64ToText, textToBase64 } from "./bytes.js";
 // state; see NewArtifact.jsx's header comment for why it is not folded in
 // here.
 import NewArtifact from "./NewArtifact.jsx";
+import BindingComposer from "./BindingComposer.jsx";
 
 // The bundle tree and the text editor: CW-20260903-0009. Every artifact is a
 // text buffer — bytes in, bytes out. This window never parses, reformats or
@@ -446,6 +447,9 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
   const [selectedRef, setSelectedRef] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerProjects, setComposerProjects] = useState([]);
+  const [composerProjectError, setComposerProjectError] = useState(null);
 
   const [originalText, setOriginalText] = useState("");
   const [draftText, setDraftText] = useState("");
@@ -545,6 +549,7 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
     // recently REQUESTED response, not merely the most recently SETTLED one.
     currentRequestRef.current = myRef;
     setProjectsOpen(false);
+    setComposerOpen(false);
     setSelectedRef(myRef);
     setSelectedNode(node);
     setOpenError(null);
@@ -595,6 +600,20 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
     setSelectedRef(null);
     setSelectedNode(null);
     setProjectsOpen(true);
+    setComposerOpen(false);
+  };
+
+  const openComposer = () => {
+    if (dirtyRef.current && !window.confirm("Discard unsaved artifact changes and open the binding composer?")) return;
+    currentRequestRef.current = null;
+    setSelectedRef(null);
+    setSelectedNode(null);
+    setProjectsOpen(false);
+    setComposerOpen(true);
+    setComposerProjectError(null);
+    ProjectAPI.List()
+      .then(setComposerProjects)
+      .catch((e) => setComposerProjectError(String(e?.message ?? e)));
   };
 
   const save = useCallback(() => {
@@ -689,6 +708,13 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
         )}
         {treeError && <p className="err tree-msg">{treeError}</p>}
         <div className="project-nav">
+          <button className={`project-nav-row${composerOpen ? " active" : ""}`} onClick={openComposer}>
+            <span className="project-nav-icon">＋</span>
+            <span>
+              <strong>Compose binding</strong>
+              <small>Profile → parts → additions → scope</small>
+            </span>
+          </button>
           <button className={`project-nav-row${projectsOpen ? " active" : ""}`} onClick={openProjects}>
             <span className="project-nav-icon">⌂</span>
             <span>
@@ -731,7 +757,9 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
         )}
       </aside>
       <section className="editor-pane">
-        {projectsOpen ? (
+        {composerOpen ? (
+          <BindingComposer tree={tree} projects={composerProjects} projectError={composerProjectError} onSaved={loadTree} />
+        ) : projectsOpen ? (
           <Projects />
         ) : !selectedNode ? (
           <p className="note editor-empty">

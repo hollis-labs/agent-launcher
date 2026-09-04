@@ -8,6 +8,7 @@ const SHELL_SERVICE = "github.com/hollis-labs/tachyon/internal/shell.Service";
 const MANAGER_SERVICE = "github.com/hollis-labs/tachyon/internal/manager.Service";
 const BINDING_SERVICE = "github.com/hollis-labs/tachyon/internal/binding.Service";
 const LAUNCH_SERVICE = "github.com/hollis-labs/tachyon/internal/launch.Service";
+const BINDING_COMPOSER_SERVICE = "github.com/hollis-labs/tachyon/internal/bindingcomposer.Service";
 const APPLY_SERVICE = "github.com/hollis-labs/tachyon/internal/apply.Service";
 const PROJECT_SERVICE = "github.com/hollis-labs/tachyon/internal/project.Service";
 
@@ -137,6 +138,14 @@ export const Binding = {
 export const Launch = {
   Binding: (name) => callService(LAUNCH_SERVICE, "Launch", name),
   Composition: (input) => callService(LAUNCH_SERVICE, "LaunchComposition", input),
+};
+
+// Create-only binding authoring in the manager. Sets are accepted for the
+// launch actions but intentionally omitted from saved YAML by the service.
+export const BindingComposer = {
+  Save: (input) => callService(BINDING_COMPOSER_SERVICE, "Save", input),
+  Launch: (input) => callService(BINDING_COMPOSER_SERVICE, "Launch", input),
+  SaveAndLaunch: (input) => callService(BINDING_COMPOSER_SERVICE, "SaveAndLaunch", input),
 };
 
 // Apply is internal/apply.Service: the manager's Apply action

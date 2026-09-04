@@ -35,23 +35,25 @@ func splitLines(data []byte) []line {
 // are absolute file offsets bounding the raw value token exactly as written
 // (quotes included, if any) — what a surgical edit replaces.
 type fieldSpan struct {
-	name  string
-	value string // decoded
-	start int
-	end   int
+	name    string
+	value   string // decoded
+	start   int
+	end     int
+	present bool
 }
 
 // scanBindingFile scans one binding file's bytes — bindings/<name>.yaml,
 // per bindings/README.md's own documented shape — for its top-level
-// "profile:" and "scope:" scalar lines. Both must appear, exactly once
-// each, as bare, unindented "key:" lines (a plain or quoted scalar value,
-// possibly empty); anything else in the file — a leading comment block,
+// "profile:" and optional "scope:" scalar lines. Profile must appear exactly
+// once; scope may appear once or be omitted, in which case its logical value
+// is empty. Each present field is a bare, unindented "key:" line (a plain or
+// quoted scalar value, possibly empty); anything else in the file — a leading comment block,
 // blank lines, indentation, or any other top-level key this package does
 // not recognize — is never read for meaning and never touched by an edit.
 // See doc.go's "bytes in, bytes out" section.
 //
-// err is non-nil, naming why, when the file does not carry both keys in
-// this shape. That is deliberate: unlike the old shared file's per-line
+// err is non-nil, naming why, when the file does not carry profile in this
+// shape. That is deliberate: unlike the old shared file's per-line
 // scan (which silently left an unrecognized line alone and moved on), one
 // whole file is now one binding, so a file this scan cannot make sense of
 // is surfaced as a real failure — see doc.go's "shape and existence only,
@@ -86,7 +88,7 @@ func scanBindingFile(data []byte) (profile, scope fieldSpan, err error) {
 			return fieldSpan{}, fieldSpan{}, fmt.Errorf("binding: line %q: %s: value is not a recognized scalar", trimmed, key)
 		}
 		start := ln.start + ci + 1 + skip
-		fs := fieldSpan{name: key, value: decoded, start: start, end: start + n}
+		fs := fieldSpan{name: key, value: decoded, start: start, end: start + n, present: true}
 
 		switch key {
 		case "profile":
@@ -101,9 +103,8 @@ func scanBindingFile(data []byte) (profile, scope fieldSpan, err error) {
 			scope, haveScope = fs, true
 		}
 	}
-	if !haveProfile || !haveScope {
-		return fieldSpan{}, fieldSpan{}, fmt.Errorf(
-			"binding: missing top-level profile: and/or scope: key (have profile=%v scope=%v)", haveProfile, haveScope)
+	if !haveProfile {
+		return fieldSpan{}, fieldSpan{}, fmt.Errorf("binding: missing top-level profile: key")
 	}
 	return profile, scope, nil
 }

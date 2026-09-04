@@ -228,7 +228,15 @@ func (s *FileStore) Update(b Binding) error {
 		if err := rejectAliasScope(aliases, b.Scope); err != nil {
 			return err
 		}
-		spans = append(spans, spliceSpan{Start: scope.start, End: scope.end, Text: renderScalar(b.Scope)})
+		if scope.present {
+			spans = append(spans, spliceSpan{Start: scope.start, End: scope.end, Text: renderScalar(b.Scope)})
+		} else {
+			separator := ""
+			if len(data) > 0 && data[len(data)-1] != '\n' {
+				separator = "\n"
+			}
+			spans = append(spans, spliceSpan{Start: len(data), End: len(data), Text: separator + "scope: " + renderScalar(b.Scope) + "\n"})
+		}
 	}
 	if len(spans) == 0 {
 		return nil

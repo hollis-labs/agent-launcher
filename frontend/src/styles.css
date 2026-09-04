@@ -330,6 +330,9 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   padding: 8px;
   border-bottom: 1px solid var(--line);
   background: #151821;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .project-nav-row {
   width: 100%; display: flex; align-items: center; gap: 10px; text-align: left;
@@ -527,6 +530,75 @@ button:hover { border-color: var(--accent); }
 .new-artifact-fields input:focus { border-color: var(--accent); }
 .new-artifact-hint { font-size: 11px; margin: 0; }
 .new-artifact-actions { display: flex; gap: 8px; }
+
+/* Create-only binding composer. Its vertical rule is Cairn's resolution
+   order, so the form reads as one composition stack rather than a set of
+   interchangeable cards. */
+.binding-composer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.binding-composer-heading {
+  padding: 18px 24px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.binding-composer-heading h2 { font-size: 15px; color: var(--accent); }
+.binding-composer-heading p { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.binding-composer-stack {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 24px 24px;
+  max-width: 760px;
+}
+.binding-composer-field {
+  padding: 13px 0 13px 22px;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.binding-composer-field label { color: var(--fg); font-size: 12px; font-weight: 600; }
+.binding-composer-field label span { margin-left: 6px; color: var(--muted); font-size: 10px; font-weight: 400; }
+.binding-composer-field input {
+  min-width: 0;
+  padding: 7px 9px;
+  color: var(--fg);
+  background: #1b1e24;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  outline: none;
+  font: 12px ui-monospace, monospace;
+}
+.binding-composer-field input:focus { border-color: var(--accent); }
+.binding-composer-add-row, .binding-composer-scope-row, .binding-composer-set-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.binding-composer-add-row input, .binding-composer-scope-row input { flex: 1; }
+.binding-composer-set-row input { flex: 1; }
+.binding-composer-set-row span { color: var(--muted); }
+.binding-composer-values { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.binding-composer-values li { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+.binding-composer-values code { flex: 1; color: var(--fg); font: 11px ui-monospace, monospace; }
+.binding-composer-values button { padding: 2px 6px; font-size: 10px; }
+.binding-composer-projects { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.binding-composer-projects button { padding: 3px 7px; font-size: 10px; }
+.binding-composer-actions {
+  flex-shrink: 0;
+  min-height: 54px;
+  padding: 10px 24px;
+  border-top: 1px solid var(--line);
+  background: #15171c;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.binding-composer-actions span { margin-right: auto; font-size: 11px; }
+.binding-composer-actions .primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 
 .note { color: var(--muted); line-height: 1.7; }
 .warn { color: #d8a657; line-height: 1.7; }

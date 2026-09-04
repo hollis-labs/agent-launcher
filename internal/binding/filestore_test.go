@@ -120,6 +120,56 @@ func TestGet(t *testing.T) {
 	}
 }
 
+func TestListAndGetAcceptOmittedScope(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "bindings")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "profile-only.yaml"), []byte("profile: engineer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := binding.NewFileStore(dir)
+	listed, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := binding.Binding{Name: "profile-only", Profile: "engineer", Scope: ""}
+	if len(listed) != 1 || listed[0] != want {
+		t.Fatalf("List = %+v; want [%+v]", listed, want)
+	}
+	got, err := s.Get("profile-only")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != want {
+		t.Fatalf("Get = %+v; want %+v", got, want)
+	}
+}
+
+func TestUpdateAddsAnOmittedScopeWithoutCorruptingTheBinding(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "bindings")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "profile-only.yaml")
+	before := "# reason this starts without a scope\nprofile: engineer\nparts:\n  - docs-only\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := binding.NewFileStore(dir)
+	if err := s.Update(binding.Binding{Name: "profile-only", Profile: "engineer", Scope: "/work/cairn"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	want := before + "scope: /work/cairn\n"
+	if got := string(mustRead(t, path)); got != want {
+		t.Fatalf("updated bytes = %q; want %q", got, want)
+	}
+}
+
 func TestGetIsUnaffectedByAnUnrelatedCorruptFile(t *testing.T) {
 	s, root := newFixtureStore(t, "fixture")
 	if err := os.WriteFile(filepath.Join(root, "bindings", "broken.yaml"), []byte("not a binding at all\n"), 0o644); err != nil {
