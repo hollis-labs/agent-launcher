@@ -17,8 +17,8 @@ import (
 // drives the unexported launch() and Service.resolveBinding() directly --
 // the orchestration seams a fake boot.Runner and a fake spawn func plug
 // into, per this task's own testing section: fakes for the runner and the
-// spawn step, and a real t.TempDir() bundle with a hand-written
-// bindings.yaml for binding resolution, without ever running cairn or
+// spawn step, and a real t.TempDir() bundle with a hand-written bindings/
+// directory for binding resolution, without ever running cairn or
 // osascript for real.
 
 // fakeRunner is a [boot.Runner] that ignores argv (beyond recording it)
@@ -130,7 +130,7 @@ func TestLaunch_CwdPreferenceBootDir(t *testing.T) {
 
 	// Composition.Scope must stay unset: b.Scope is not forwarded as an
 	// explicit --scope, because Target (the binding's own name) already
-	// resolves it via bindings.yaml -- see launch()'s own doc comment.
+	// resolves it via internal/binding, not this file -- see launch()'s own doc comment.
 	for _, a := range fr.gotArgv {
 		if a == "--scope" {
 			t.Fatalf("cairn argv %v contains --scope; Composition.Scope must stay unset", fr.gotArgv)
@@ -311,10 +311,16 @@ func TestLaunch_RelaunchingSameBindingMovesPreviousAsideInsteadOfFailing(t *test
 
 // --- Service.resolveBinding ------------------------------------------------
 
-func writeBindingsYAML(t *testing.T, dir, contents string) {
+// writeBindingFile writes bindings/<name>.yaml directly under bundleRoot —
+// the same per-file shape [binding.Open] reads (CW-20260904-0002 / T23).
+func writeBindingFile(t *testing.T, bundleRoot, name, contents string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "bindings.yaml"), []byte(contents), 0o644); err != nil {
-		t.Fatalf("writing bindings.yaml: %v", err)
+	dir := filepath.Join(bundleRoot, "bindings")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(contents), 0o644); err != nil {
+		t.Fatalf("writing %s.yaml: %v", name, err)
 	}
 }
 
@@ -329,7 +335,7 @@ func newRootStore(t *testing.T, bundleRoot string) bundle.RootStore {
 
 func TestResolveBinding_FindsBindingAndReturnsBundleRoot(t *testing.T) {
 	bundleDir := t.TempDir()
-	writeBindingsYAML(t, bundleDir, "bindings:\n  eng-nanite: { profile: engineer, scope: /Users/chrispian/dev/hollis-labs/apps/nanite }\n")
+	writeBindingFile(t, bundleDir, "eng-nanite", "profile: engineer\nscope: /Users/chrispian/dev/hollis-labs/apps/nanite\n")
 
 	store := newRootStore(t, bundleDir)
 	svc := NewService(store)
@@ -352,7 +358,7 @@ func TestResolveBinding_FindsBindingAndReturnsBundleRoot(t *testing.T) {
 
 func TestResolveBinding_NotFoundWrapsBindingErrNotFound(t *testing.T) {
 	bundleDir := t.TempDir()
-	writeBindingsYAML(t, bundleDir, "bindings:\n  eng-nanite: { profile: engineer, scope: /x }\n")
+	writeBindingFile(t, bundleDir, "eng-nanite", "profile: engineer\nscope: /x\n")
 
 	store := newRootStore(t, bundleDir)
 	svc := NewService(store)
