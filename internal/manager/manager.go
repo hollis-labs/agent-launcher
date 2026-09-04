@@ -359,18 +359,17 @@ func (s *Service) DefaultRoot() (string, error) {
 
 // --- CW-20260903-0010: the "new artifact" entry point ---
 //
-// The two methods below are this task's one deliberately narrow addition to
-// this service. Everything above this line is T05's (CW-20260903-0009) and
-// is untouched; the scaffold content itself, and the dispatch table a future
-// binding case extends, live entirely in internal/skeleton — see that
-// package's doc for the seam CW-20260903-0011 (T07) will fill in.
+// NewArtifactKinds and NewArtifact expose internal/skeleton's registry-backed
+// creation path. NewPart is the placement-specific companion: it creates an
+// ordinary profile in profiles/parts without inventing another bundle kind.
+// Scaffold content and create-only publication remain owned by skeleton.
 
 // NewArtifactKinds reports which kinds [Service.NewArtifact] can create
 // today, so the frontend's "new artifact" picker does not hardcode a list
-// that could drift from what actually works. bundle.KindBinding is
-// deliberately absent — see internal/skeleton's package doc — and reappears
-// here automatically once that package's registry gains an entry for it, no
-// frontend change required.
+// that could drift from what actually works. It currently reports all bundle
+// kinds except [bundle.KindHook]. A part is deliberately absent because it is
+// a profile placement, not a kind; the frontend offers that intent through
+// [Service.NewPart].
 func (s *Service) NewArtifactKinds() []bundle.Kind {
 	return skeleton.SupportedKinds()
 }
@@ -382,7 +381,9 @@ func (s *Service) NewArtifactKinds() []bundle.Kind {
 //
 // name and description are used only by the kinds whose scaffold has
 // somewhere to put them (see [skeleton.Spec]); passing them for a kind that
-// ignores them is harmless.
+// ignores them is harmless. KindProfile here creates profiles/<id>.md;
+// [Service.NewPart] is the separate placement intent for
+// profiles/parts/<id>.md.
 func (s *Service) NewArtifact(kind, id, name, description string) (Content, error) {
 	b, err := s.open()
 	if err != nil {
@@ -394,6 +395,27 @@ func (s *Service) NewArtifact(kind, id, name, description string) (Content, erro
 		Name:        name,
 		Description: description,
 	})
+	if err != nil {
+		return Content{}, err
+	}
+	data, err := b.Read(ref)
+	if err != nil {
+		return Content{}, err
+	}
+	return s.describe(b, ref, data)
+}
+
+// NewPart creates an ordinary profile under profiles/parts/. The separate
+// method expresses placement only: its result is KindProfile with a bare id,
+// and every later Tree/Open/Save call uses the same profile path as a root
+// profile. skeleton.NewPart owns both the minimal scaffold and the collision
+// preflight shared with root-profile creation.
+func (s *Service) NewPart(id string) (Content, error) {
+	b, err := s.open()
+	if err != nil {
+		return Content{}, err
+	}
+	ref, err := skeleton.NewPart(b.Root(), id)
 	if err != nil {
 		return Content{}, err
 	}

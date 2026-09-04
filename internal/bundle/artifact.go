@@ -8,7 +8,8 @@ package bundle
 type Kind string
 
 const (
-	// KindProfile is profiles/<id>.md — the unit of composition.
+	// KindProfile is profiles/<id>.md or profiles/parts/<id>.md — the unit
+	// of composition. The subdirectory is organization, not another kind.
 	KindProfile Kind = "profile"
 	// KindRoleProse is templates/roles/<id>.md — prose a profile pulls in
 	// through its "role" slot. Not a profile.
@@ -46,7 +47,8 @@ func Kinds() []Kind {
 // prose files all share a basename with a profile, so this separation is what
 // keeps "the architect role" from being ambiguous.
 type (
-	// ProfileID is the basename of a profiles/*.md file, without ".md".
+	// ProfileID is the basename of a profiles/*.md or immediate
+	// profiles/parts/*.md file, without ".md".
 	ProfileID string
 	// RoleProseID is the basename of a templates/roles/*.md file, without
 	// ".md". It is not a ProfileID even when it spells the same word.
@@ -72,7 +74,8 @@ type Ref struct {
 	ID   string
 }
 
-// Profile is profiles/<id>.md.
+// Profile is profiles/<id>.md or profiles/parts/<id>.md. Both locations
+// share one bare-ID namespace.
 type Profile struct {
 	// ID is the file's basename without ".md". It is not necessarily the "id"
 	// in the frontmatter; nothing here reconciles the two (D8).

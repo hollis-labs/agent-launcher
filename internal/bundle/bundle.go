@@ -14,6 +14,7 @@ import (
 // Directory and file names the bundle layout is made of.
 const (
 	dirProfiles  = "profiles"
+	dirParts     = "parts" // immediate subdirectory of dirProfiles
 	dirTemplates = "templates"
 	dirRoles     = "roles" // under dirTemplates
 	dirPrompts   = "prompts"
@@ -29,6 +30,11 @@ const (
 // ErrNotFound is returned by [Bundle.Read] and [Bundle.Resolve] when a [Ref]
 // names nothing in the bundle. Test for it with errors.Is.
 var ErrNotFound = errors.New("bundle: artifact not found")
+
+// ErrDuplicateProfileID reports that a root profile and an immediate
+// profiles/parts profile have the same bare id. The two locations are one
+// namespace: traversal order must never silently choose which file wins.
+var ErrDuplicateProfileID = errors.New("bundle: two profiles claim one id")
 
 // ErrRootMissing reports that the bundle root itself is gone, or that
 // something that is not a directory now stands where it was. Test for it with
@@ -158,27 +164,54 @@ func (b *Bundle) HasKnownShape() bool {
 	return false
 }
 
-// Profiles enumerates profiles/*.md, sorted by id.
+// Profiles enumerates profiles/*.md plus immediate profiles/parts/*.md,
+// sorted together by bare id.
 //
 // Each profile's frontmatter is read shallowly for display. A file whose
 // frontmatter is absent or unreadable still appears, with an empty [Header];
-// nothing here validates content (D8).
+// nothing here validates content (D8). profiles/parts is an organizational
+// convention, not another kind: nested files are ordinary [KindProfile]
+// values and resolve through the same bare-id namespace as root profiles.
+// Deeper directories are not descended, and a symlinked or non-directory
+// parts entry is ignored rather than followed outside the reviewed bundle.
 func (b *Bundle) Profiles() ([]Profile, error) {
-	names, err := b.listFiles(extMarkdown, dirProfiles)
+	rootNames, err := b.listFiles(extMarkdown, dirProfiles)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Profile, 0, len(names))
-	for _, name := range names {
+	partNames, err := b.listFilesInRealDir(extMarkdown, dirProfiles, dirParts)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Profile, 0, len(rootNames)+len(partNames))
+	byID := make(map[string]string, len(rootNames)+len(partNames))
+	add := func(name, rel string) error {
 		id := strings.TrimSuffix(name, extMarkdown)
-		rel := path.Join(dirProfiles, name)
+		if first, ok := byID[id]; ok {
+			return fmt.Errorf("%w: %q is declared by %s and by %s — rename one, since a profile is named by its id wherever the file sits",
+				ErrDuplicateProfileID, id, b.abs(first), b.abs(rel))
+		}
+		byID[id] = rel
 		out = append(out, Profile{
 			ID:      ProfileID(id),
 			Path:    b.abs(rel),
 			RelPath: rel,
 			Header:  b.readHeader(rel),
 		})
+		return nil
 	}
+	for _, name := range rootNames {
+		if err := add(name, path.Join(dirProfiles, name)); err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range partNames {
+		if err := add(name, path.Join(dirProfiles, dirParts, name)); err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 
@@ -448,7 +481,16 @@ func (b *Bundle) Write(ref Ref, data []byte) error {
 func (b *Bundle) Resolve(ref Ref) (string, error) {
 	switch ref.Kind {
 	case KindProfile:
-		return b.resolveFile(ref, extMarkdown, dirProfiles)
+		profiles, err := b.Profiles()
+		if err != nil {
+			return "", err
+		}
+		for _, profile := range profiles {
+			if string(profile.ID) == ref.ID {
+				return profile.Path, nil
+			}
+		}
+		return "", fmt.Errorf("%w: %s %q", ErrNotFound, ref.Kind, ref.ID)
 	case KindRoleProse:
 		return b.resolveFile(ref, extMarkdown, dirTemplates, dirRoles)
 	case KindTemplate:
@@ -524,6 +566,28 @@ func (b *Bundle) listFiles(ext string, dir ...string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// listFilesInRealDir is listFiles for the one bundle directory that must not
+// be reached through a symlink. It checks the directory entry itself with
+// Lstat before calling ReadDir, so profiles/parts -> /somewhere/else is
+// treated exactly like any other ignored subdirectory rather than followed.
+// A regular file named parts is ignored as well.
+func (b *Bundle) listFilesInRealDir(ext string, dir ...string) ([]string, error) {
+	rel := path.Join(dir...)
+	info, err := os.Lstat(b.abs(rel))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if rootErr := b.checkRoot(); rootErr != nil {
+			return nil, rootErr
+		}
+		return []string{}, nil
+	case err != nil:
+		return nil, fmt.Errorf("bundle: checking %s: %w", rel, err)
+	case info.Mode()&fs.ModeSymlink != 0 || !info.IsDir():
+		return []string{}, nil
+	}
+	return b.listFiles(ext, dir...)
 }
 
 // listDirs returns the sorted names of the directories directly under the

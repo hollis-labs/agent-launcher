@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -45,10 +46,15 @@ var (
 	// entirely; see the package doc). bundle.KindBinding used to be one of
 	// these too, before CW-20260904-0002 (T23) gave it a real scaffold.
 	ErrKindNotSupported = errors.New("skeleton: kind not supported")
-	// ErrAlreadyExists reports that the target path is already occupied. New
-	// creates; it never overwrites — a caller that wants to edit an existing
-	// artifact uses internal/manager's Open/Save instead.
+	// ErrAlreadyExists reports that the target path is already occupied, or
+	// that a profile's bare id is occupied in the other profile location.
+	// New creates; it never overwrites — a caller that wants to edit an
+	// existing artifact uses internal/manager's Open/Save instead.
 	ErrAlreadyExists = errors.New("skeleton: already exists")
+	// ErrUnsafeDestination reports that NewPart would have to follow a
+	// symlink, or traverse a non-directory, to reach profiles/parts. A part
+	// must always land inside the reviewed bundle tree.
+	ErrUnsafeDestination = errors.New("skeleton: unsafe part destination")
 )
 
 // idPattern is the character set every id in this bundle already uses:
@@ -132,7 +138,9 @@ func SupportedKinds() []bundle.Kind {
 //
 // This is the one place in Tachyon that authors a file whole — see the
 // package doc's note on D5. It refuses to overwrite an existing file
-// ([ErrAlreadyExists]); refuses an id [validateID] rejects ([ErrInvalidID]);
+// ([ErrAlreadyExists]); for profiles, also refuses the same bare id in the
+// other profiles/parts placement before any write; refuses an id [validateID]
+// rejects ([ErrInvalidID]);
 // and refuses a kind [registry] has no entry for ([ErrKindNotSupported],
 // which today means only bundle.KindHook — see the package doc).
 //
@@ -144,6 +152,23 @@ func SupportedKinds() []bundle.Kind {
 // Nothing here shells out to Cairn and nothing here writes to
 // ~/.config/agents or ~/.claude — only into the bundle root's own tree.
 func New(root string, spec Spec) (bundle.Ref, error) {
+	return newArtifact(root, spec, entry{})
+}
+
+// NewPart creates profiles/parts/<id>.md as an ordinary [bundle.KindProfile].
+// The placement is an authoring intent, not an artifact kind: the returned
+// ref is the same bare profile ref that [New] returns for a root profile.
+func NewPart(root, id string) (bundle.Ref, error) {
+	return newArtifact(root, Spec{Kind: bundle.KindProfile, ID: id}, entry{
+		relPath:  partRelPath,
+		scaffold: partScaffold,
+	})
+}
+
+// newArtifact is the common create-only publication path. override is empty
+// for ordinary New calls and supplies the alternate placement/scaffold for
+// NewPart without adding another bundle.Kind.
+func newArtifact(root string, spec Spec, override entry) (bundle.Ref, error) {
 	id := strings.TrimSpace(spec.ID)
 	if err := validateID(id); err != nil {
 		return bundle.Ref{}, err
@@ -154,6 +179,9 @@ func New(root string, spec Spec) (bundle.Ref, error) {
 	if !ok {
 		return bundle.Ref{}, fmt.Errorf("%w: %s", ErrKindNotSupported, spec.Kind)
 	}
+	if override.relPath != nil {
+		e = override
+	}
 
 	b, err := bundle.Open(root)
 	if err != nil {
@@ -163,8 +191,17 @@ func New(root string, spec Spec) (bundle.Ref, error) {
 	rel := e.relPath(id)
 	target := filepath.Join(b.Root(), filepath.FromSlash(rel))
 
-	if _, statErr := os.Stat(target); statErr == nil {
-		return bundle.Ref{}, fmt.Errorf("%w: %s", ErrAlreadyExists, rel)
+	if spec.Kind == bundle.KindProfile {
+		if rel == partRelPath(id) {
+			if err := checkPartDestination(b.Root()); err != nil {
+				return bundle.Ref{}, err
+			}
+		}
+		if err := checkProfileCollision(b.Root(), id, rel); err != nil {
+			return bundle.Ref{}, err
+		}
+	} else if _, statErr := os.Lstat(target); statErr == nil {
+		return bundle.Ref{}, fmt.Errorf("%w: requested %s conflicts with existing %s", ErrAlreadyExists, rel, rel)
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return bundle.Ref{}, fmt.Errorf("skeleton: checking %s: %w", target, statErr)
 	}
@@ -181,7 +218,7 @@ func New(root string, spec Spec) (bundle.Ref, error) {
 	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return bundle.Ref{}, fmt.Errorf("%w: %s", ErrAlreadyExists, rel)
+			return bundle.Ref{}, fmt.Errorf("%w: requested %s conflicts with existing %s", ErrAlreadyExists, rel, rel)
 		}
 		return bundle.Ref{}, fmt.Errorf("skeleton: creating %s: %w", target, err)
 	}
@@ -206,6 +243,63 @@ func New(root string, spec Spec) (bundle.Ref, error) {
 		refID = e.refID(id)
 	}
 	return bundle.Ref{Kind: spec.Kind, ID: refID}, nil
+}
+
+// checkProfileCollision checks both physical homes in the one profile id
+// namespace before MkdirAll, CreateTemp, or OpenFile can mutate the bundle.
+// Lstat treats even a dangling symlink as occupied. O_EXCL below remains the
+// same-path race guard after this cross-location preflight.
+func checkProfileCollision(root, id, requestedRel string) error {
+	candidates := []string{profileRelPath(id)}
+	partsRel := path.Join("profiles", "parts")
+	partsInfo, err := os.Lstat(filepath.Join(root, filepath.FromSlash(partsRel)))
+	switch {
+	case err == nil && partsInfo.IsDir() && partsInfo.Mode()&os.ModeSymlink == 0:
+		candidates = append(candidates, partRelPath(id))
+	case errors.Is(err, os.ErrNotExist):
+		// There cannot be a nested collision before the real directory exists.
+	case err != nil:
+		return fmt.Errorf("skeleton: checking profile collision directory %s: %w", partsRel, err)
+	default:
+		// A symlinked or non-directory parts entry is outside the readable
+		// profile catalog. NewPart has already refused it; a root-profile
+		// creation must neither follow it nor treat outside content as a
+		// profile collision.
+	}
+	for _, existingRel := range candidates {
+		_, err := os.Lstat(filepath.Join(root, filepath.FromSlash(existingRel)))
+		switch {
+		case err == nil:
+			return fmt.Errorf("%w: requested %s conflicts with existing profile %s",
+				ErrAlreadyExists, requestedRel, existingRel)
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		default:
+			return fmt.Errorf("skeleton: checking profile collision at %s: %w", existingRel, err)
+		}
+	}
+	return nil
+}
+
+// checkPartDestination proves each existing directory component specific to
+// profiles/parts is a real directory entry. In particular, os.MkdirAll must
+// never be allowed to follow profiles/parts (or its profiles parent) through
+// a symlink and publish an apparently in-bundle file somewhere else.
+func checkPartDestination(root string) error {
+	for _, rel := range []string{"profiles", path.Join("profiles", "parts")} {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
+			return fmt.Errorf("%w: checking %s: %v", ErrUnsafeDestination, rel, err)
+		case info.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("%w: %s is a symlink", ErrUnsafeDestination, rel)
+		case !info.IsDir():
+			return fmt.Errorf("%w: %s is not a directory", ErrUnsafeDestination, rel)
+		}
+	}
+	return nil
 }
 
 // validateID rejects any id that would not round-trip safely: empty, or not

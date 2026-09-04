@@ -9,15 +9,16 @@ import (
 )
 
 // --- relPath functions: where each kind lands, mirroring internal/bundle's
-// own (unexported) directory layout constants. Duplicating four short path
+// own (unexported) directory layout constants. Keeping these short path
 // joins here — rather than exporting bundle's dirProfiles/dirTemplates/etc. —
-// keeps this package's only coupling to bundle's public surface (Open, Kind,
-// Ref, Kinds), which is what let this whole package be written and tested
-// without touching a single line of internal/bundle. bundle.KindBinding's
-// relPath is [binding.BindingRelPath] itself, not a fifth function here —
+// keeps the creation package coupled only to bundle's public surface. The
+// bundle itself independently owns enumeration and resolution of both profile
+// locations. bundle.KindBinding's relPath is [binding.BindingRelPath] itself,
+// rather than a function here —
 // see [registry]'s own doc for why. ---
 
 func profileRelPath(id string) string   { return path.Join("profiles", id+".md") }
+func partRelPath(id string) string      { return path.Join("profiles", "parts", id+".md") }
 func roleProseRelPath(id string) string { return path.Join("templates", "roles", id+".md") }
 func templateRelPath(id string) string  { return path.Join("templates", id+".md") }
 func promptRelPath(id string) string    { return path.Join("prompts", id+".md") }
@@ -74,6 +75,19 @@ func profileScaffold(spec Spec) []byte {
 	b.WriteString("#   skills: [skill-one, skill-two]\n")
 	b.WriteString("---\n")
 	return []byte(b.String())
+}
+
+// partScaffold renders profiles/parts/<id>.md. A part is directly bootable,
+// so it extends base, but it deliberately carries no identity-like metadata:
+// composed profile metadata participates in resolution, and a generic part
+// must not overwrite the target profile's name, description, or provider.
+func partScaffold(spec Spec) []byte {
+	return []byte("---\n" +
+		"id: " + spec.ID + "\n" +
+		"extends: base\n" +
+		"spec: {}\n" +
+		"# Replace spec with only the keys this part contributes.\n" +
+		"---\n")
 }
 
 // roleProseScaffold renders templates/roles/<id>.md.
