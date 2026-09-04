@@ -36,6 +36,14 @@ export const Shell = {
   // could not be trusted this run (see guardDetail) and nothing was
   // removed -- that is not the same thing as "nothing needed cleaning up".
   SweepBootDirectories: () => call("SweepBootDirectories"),
+  // PickBundleRoot is CW-20260904-0019's addition: a real native macOS
+  // folder picker (application.App.Dialog.OpenFile with
+  // CanChooseDirectories(true), attached to the manager window -- see
+  // internal/shell.Service.PickBundleRoot's own doc). Resolves to the
+  // chosen absolute directory, or "" if the user dismissed the dialog
+  // without picking one. It only picks -- the caller still has to hand
+  // the result to Manager.SetRoot to actually change anything.
+  PickBundleRoot: () => call("PickBundleRoot"),
 };
 
 // Manager is internal/manager.Service: the bundle tree and the byte-exact
@@ -43,11 +51,30 @@ export const Shell = {
 // string Go's encoding/json produces for a []byte field/argument — see
 // src/bytes.js for the encode/decode helpers and internal/manager's package
 // doc for why base64 rather than a plain string.
+// Tree()'s resolved value now also carries a State field (CW-20260904-0019),
+// "ok" | "unrecognized" -- see internal/manager.Service's Tree type doc.
+// "unrecognized" means the root exists and is readable but has none of the
+// five known artifact directories under it: a directory that was never a
+// bundle (a home directory, a Desktop, a typo), not a genuinely empty one.
+// A root that does not exist at all still rejects the promise, same as
+// always -- State is only reached once there is a readable directory to
+// describe a shape for.
 export const Manager = {
   Tree: () => callService(MANAGER_SERVICE, "Tree"),
   Open: (kind, id) => callService(MANAGER_SERVICE, "Open", kind, id),
   Save: (kind, id, contentBase64) => callService(MANAGER_SERVICE, "Save", kind, id, contentBase64),
   Root: () => callService(MANAGER_SERVICE, "Root"),
+  // SetRoot changes the active bundle root and persists it -- bound to
+  // RootStore.Save (CW-20260904-0019). Every other call this bridge makes
+  // (Tree, Open, Save, Binding.List) resolves the root fresh every time,
+  // so nothing else needs to happen for the next one of those to read the
+  // new bundle -- the caller (Manager.jsx) still has to actually make
+  // those next calls itself, this only changes what they will return.
+  SetRoot: (root) => callService(MANAGER_SERVICE, "SetRoot", root),
+  // DefaultRoot is the bundle Tachyon opens when nothing has been chosen,
+  // for a "reset to default" affordance that never hardcodes the default
+  // path a second time here in JavaScript.
+  DefaultRoot: () => callService(MANAGER_SERVICE, "DefaultRoot"),
   // NewArtifactKinds/NewArtifact are CW-20260903-0010's addition: see
   // internal/manager.Service's "new artifact entry point" section. kind is
   // one of bundle.Kind's values as a plain string, same as Open/Save above.

@@ -167,11 +167,38 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
 }
 .manager-shell header h1 { font-size: 13px; font-weight: 600; color: var(--accent); }
 /* Every clickable element inside the drag region above must opt out or it
-   silently stops receiving clicks (CW-20260904-0007) -- currently just
-   these two buttons. Add any future interactive header element here too. */
+   silently stops receiving clicks (CW-20260904-0007) -- header button below
+   covers every button in the header, including BundleRootBar's, since it is
+   a descendant selector. Add any future interactive header element here
+   too if it is not a <button>. */
 .manager-shell header button { --wails-draggable: no-drag; }
 .manager-shell main { flex: 1; overflow: auto; padding: 20px; min-height: 0; }
 .manager-shell main.no-pad { padding: 0; overflow: hidden; display: flex; }
+
+/* Persistently visible in every tab (CW-20260904-0019) -- the active
+   bundle root, and how to change it. */
+.bundle-root-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+  font-size: 11px;
+}
+.bundle-root-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+  color: var(--muted);
+}
+.bundle-root-bar-label code {
+  font-family: ui-monospace, monospace;
+  color: var(--fg);
+}
+.bundle-root-bar button { font-size: 11px; padding: 4px 8px; }
+.bundle-root-bar .ok,
+.bundle-root-bar .err { white-space: nowrap; }
 
 .settings-pane { height: 100%; overflow: auto; padding: 20px; }
 

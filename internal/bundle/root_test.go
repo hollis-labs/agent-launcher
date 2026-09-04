@@ -164,3 +164,118 @@ func TestDefaultRootPathIsTheLiveBundle(t *testing.T) {
 		t.Fatalf("DefaultRootPath = %q", bundle.DefaultRootPath)
 	}
 }
+
+// TestChangingBundleRootDoesNotTouchTachyonState is CW-20260904-0019's own
+// explicit acceptance criterion: the bundle root is a pointer to content,
+// persisted under state.Dir()'s own "tachyon" (lowercase) subdirectory —
+// but changing WHAT it points at must never change WHERE Tachyon's own
+// settings live, or move state.Root() ("Tachyon", capitalized) or
+// state.BootRoot() at all.
+//
+// TACHYON_STATE_DIR redirects state.Dir() to a temp directory for the
+// whole test, so nothing here can touch a real machine's
+// ~/Library/Application Support — the same isolation
+// TestDefaultRootStoreIsUnderTheUserConfigDir relies on state.Dir() for,
+// just pinned rather than left to the real OS lookup.
+func TestChangingBundleRootDoesNotTouchTachyonState(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv(state.DirEnv, stateDir)
+
+	wantDir, err := state.Dir()
+	if err != nil {
+		t.Fatalf("state.Dir: %v", err)
+	}
+	wantRoot, err := state.Root()
+	if err != nil {
+		t.Fatalf("state.Root: %v", err)
+	}
+	wantBoot, err := state.BootRoot()
+	if err != nil {
+		t.Fatalf("state.BootRoot: %v", err)
+	}
+	if _, err := os.Stat(wantRoot); !os.IsNotExist(err) {
+		t.Fatalf("state.Root() %q already exists before the test touched anything; test is not isolated: %v", wantRoot, err)
+	}
+
+	store, err := bundle.DefaultRootStore()
+	if err != nil {
+		t.Fatalf("DefaultRootStore: %v", err)
+	}
+	wantStorePath := filepath.Join(stateDir, "tachyon", "bundle.json")
+	if store.Path != wantStorePath {
+		t.Fatalf("DefaultRootStore().Path = %q; want %q", store.Path, wantStorePath)
+	}
+
+	// Change the active bundle root — twice, to a couple of different
+	// scratch directories, the way a real "pick a folder" / "reset to
+	// default" sequence would.
+	first := t.TempDir()
+	if err := store.Save(first); err != nil {
+		t.Fatalf("Save(%s): %v", first, err)
+	}
+	second := t.TempDir()
+	if err := store.Save(second); err != nil {
+		t.Fatalf("Save(%s): %v", second, err)
+	}
+	if got, err := store.Load(); err != nil || got != second {
+		t.Fatalf("Load after two Saves = (%q, %v); want (%q, nil)", got, err, second)
+	}
+
+	// state.Dir/Root/BootRoot are pure functions of TACHYON_STATE_DIR, so
+	// resolving them again is a sanity check, not the real assertion — the
+	// real assertion is that Save never created anything on disk under
+	// state.Root() (the capitalized "Tachyon" directory shell.json and
+	// boot/ live under), only under state.Dir()'s own lowercase "tachyon".
+	if gotDir, err := state.Dir(); err != nil || gotDir != wantDir {
+		t.Fatalf("state.Dir() after two bundle-root Saves = (%q, %v); want (%q, nil)", gotDir, err, wantDir)
+	}
+	if gotRoot, err := state.Root(); err != nil || gotRoot != wantRoot {
+		t.Fatalf("state.Root() after two bundle-root Saves = (%q, %v); want (%q, nil)", gotRoot, err, wantRoot)
+	}
+	if gotBoot, err := state.BootRoot(); err != nil || gotBoot != wantBoot {
+		t.Fatalf("state.BootRoot() after two bundle-root Saves = (%q, %v); want (%q, nil)", gotBoot, err, wantBoot)
+	}
+
+	// The real assertion: exactly one entry was created directly under
+	// state.Dir(), and it is named "tachyon" — case-preserved, listed via
+	// os.ReadDir rather than checked with os.Stat.
+	//
+	// os.Stat cannot tell "tachyon" and "Tachyon" (state.Root()'s own
+	// name) apart on this machine's filesystem: APFS's default mode is
+	// case-insensitive but case-preserving, so once
+	// bundle.RootStore.Save has created "tachyon", os.Stat(".../Tachyon")
+	// resolves to the very same directory and reports it as existing —
+	// which would make a Stat-based "state.Root() must not exist" check
+	// fail on every macOS machine with default settings regardless of
+	// what Save actually wrote, proving nothing about which name was
+	// really created. os.ReadDir's entry names are the literal bytes on
+	// disk, unaffected by that lookup-time folding, so listing state.Dir()
+	// and checking the one entry's Name() is what actually distinguishes
+	// "Save wrote its own lowercase tachyon/" from "Save (somehow) wrote
+	// into state.Root()'s Tachyon/" on a case-insensitive volume.
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", stateDir, err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "tachyon" {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("state.Dir() %q has entries %v after two bundle-root Saves; want exactly one, named %q (bundle.RootStore's own directory) — not %q (state.Root()'s own name) or anything else",
+			stateDir, names, "tachyon", filepath.Base(wantRoot))
+	}
+
+	tachyonEntries, err := os.ReadDir(filepath.Join(stateDir, "tachyon"))
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", filepath.Join(stateDir, "tachyon"), err)
+	}
+	if len(tachyonEntries) != 1 || tachyonEntries[0].Name() != "bundle.json" {
+		names := make([]string, len(tachyonEntries))
+		for i, e := range tachyonEntries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("state.Dir()/tachyon has entries %v after two bundle-root Saves; want exactly one, %q — nothing named %q (state.BootRoot()'s own \"boot\" name) or anything else belonging to Tachyon's own state",
+			names, "bundle.json", filepath.Base(wantBoot))
+	}
+}

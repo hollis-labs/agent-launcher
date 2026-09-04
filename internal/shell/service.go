@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/hollis-labs/tachyon/internal/boot"
 )
@@ -72,6 +73,43 @@ func (s *Service) OpenManager() { s.shell.OpenManager() }
 
 // HidePalette hides the palette window.
 func (s *Service) HidePalette() { s.shell.HidePalette() }
+
+// PickBundleRoot opens a native "choose a folder" dialog, attached to the
+// manager window, and returns the directory the user picked, or "" if
+// they dismissed it without choosing one (Wails' OpenFileDialogStruct
+// closes its result channel with nothing sent on cancel, which
+// PromptForSingleSelection surfaces as ("", nil) — a real macOS
+// application.App.Dialog.OpenFile, CanChooseDirectories(true), not
+// anything hand-rolled: see pkg/application/dialogs.go and
+// dialogs_darwin.go in the vendored Wails v3.0.0-beta.16 module).
+//
+// This method only picks — it does not persist anything. The frontend is
+// expected to hand a non-empty result to
+// internal/manager.Service.SetRoot, the exact same call it would make for
+// a path typed by hand into a text field (CW-20260904-0019).
+//
+// It lives here, not in internal/manager, because showing a native dialog
+// needs application.App.Dialog and a window to attach it to, and only
+// this package holds either; internal/manager.Service has no window
+// handle of its own.
+//
+// There is no automated test for this beyond the build itself: like the
+// rest of this package's window-facing surface, it requires a real
+// windowing system this suite does not have — see the package doc's note
+// on why there is no shell.New test either.
+func (s *Service) PickBundleRoot() (string, error) {
+	dir, err := s.shell.app.Dialog.OpenFile().
+		SetTitle("Choose a bundle").
+		SetMessage("Pick the folder Tachyon should read and edit as the active bundle.").
+		CanChooseFiles(false).
+		CanChooseDirectories(true).
+		AttachToWindow(s.shell.manager).
+		PromptForSingleSelection()
+	if err != nil {
+		return "", fmt.Errorf("shell: picking a bundle root: %w", err)
+	}
+	return dir, nil
+}
 
 // SweepBootDirectories is the manual action the manager's Settings pane
 // offers for CW-20260903-0019's .prev-* sweep: it calls the exact same

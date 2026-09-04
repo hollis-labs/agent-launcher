@@ -118,6 +118,45 @@ func ExpandRoot(root string) (string, error) {
 // Root is the absolute directory this Bundle reads.
 func (b *Bundle) Root() string { return b.root }
 
+// shapeDirs are the top-level directory names whose presence under a root
+// is what [Bundle.HasKnownShape] checks for. dirRoles is deliberately
+// excluded: it nests under dirTemplates rather than sitting at the root
+// itself, so its presence or absence says nothing about the root.
+var shapeDirs = []string{dirProfiles, dirTemplates, dirSkills, dirHooks, dirBindings}
+
+// HasKnownShape reports whether the root looks like a bundle at all: does
+// at least one of the five top-level artifact directories this package
+// knows about exist directly under it?
+//
+// This is a shape check, not a content check (D8): it only looks at
+// directory names, never opens a file inside any of them, and is
+// satisfied by just one of the five being present. Its whole job is
+// telling apart two roots that both enumerate as "zero artifacts
+// everywhere" — a bundle that is genuinely empty (created, but nothing
+// has been added to it yet: profiles/ exists and has no files in it, say)
+// from a directory that was never a bundle to begin with (a home
+// directory, a Desktop, a typo in a path). [Bundle.Contents] and every
+// per-kind enumeration answer both the same way today, by design — "a
+// missing artifact directory enumerates as empty" — and that stays true
+// here: this method exists so a caller ABOVE that layer (see
+// internal/manager.Service.Tree) can still tell the two situations apart
+// and say so, without this package's own enumeration semantics changing
+// at all.
+//
+// It does not re-check that the root itself exists: a caller that already
+// has a *Bundle already went through [Open], which would have failed with
+// [ErrRootMissing] otherwise — this only ever answers "which of the known
+// directories exist under it," nothing about the root's own existence.
+func (b *Bundle) HasKnownShape() bool {
+	for _, name := range shapeDirs {
+		info, err := os.Stat(b.abs(name))
+		if err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
 // Profiles enumerates profiles/*.md, sorted by id.
 //
 // Each profile's frontmatter is read shallowly for display. A file whose

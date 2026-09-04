@@ -44,15 +44,34 @@ export default function Palette() {
 
   useEffect(() => {
     let cancelled = false;
-    Binding.List()
-      .then((result) => {
-        if (!cancelled) setListResult(result ?? { bindings: [], state: "ok", path: "" });
-      })
-      .catch((err) => {
-        if (!cancelled) setListResult({ state: "error", detail: String(err?.message ?? err) });
-      });
+    let requestId = 0;
+    const load = () => {
+      const myRequestId = ++requestId;
+      Binding.List()
+        .then((result) => {
+          if (cancelled || myRequestId !== requestId) return;
+          setListResult(result ?? { bindings: [], state: "ok", path: "" });
+        })
+        .catch((err) => {
+          if (cancelled || myRequestId !== requestId) return;
+          setListResult({ state: "error", detail: String(err?.message ?? err) });
+        });
+    };
+    load();
+    // The palette window's webview is never destroyed between summons --
+    // TogglePalette only Hide()s/Show()s it (internal/shell/shell.go), so
+    // without this a palette that had already loaded once would keep
+    // showing whichever bundle was active the first time it loaded,
+    // forever, even after the manager changed the active bundle root
+    // (CW-20260904-0019). Re-reading on focus, the same trigger
+    // Manager.jsx's Bundle() already uses for its own tree, is what makes
+    // "no restart" true here too: Show() + Focus() (TogglePalette) fires a
+    // real "focus" DOM event on this window's top-level browsing context
+    // every time the palette is summoned, not just the first time.
+    window.addEventListener("focus", load);
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", load);
     };
   }, []);
 

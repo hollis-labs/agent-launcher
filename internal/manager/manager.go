@@ -148,6 +148,25 @@ type Tree struct {
 	// the manager can show the user which bundle they are editing.
 	Root   string  `json:"root"`
 	Groups []Group `json:"groups"`
+	// State distinguishes, at the scope Tree can actually speak to, two
+	// situations that both enumerate as all-empty groups and both leave
+	// err nil (CW-20260904-0019): "ok" means the root looks like a real
+	// bundle — [bundle.Bundle.HasKnownShape] found at least one of the
+	// five known artifact directories under it — possibly still all-empty,
+	// when there is genuinely nothing in it yet. "unrecognized" means the
+	// root exists and is readable but has none of them: the shape check
+	// (D8 — directory names only, never a file's content) that tells a
+	// genuinely empty bundle apart from a directory that was never a
+	// bundle at all (a home directory, a Desktop, a typo in a path). This
+	// mirrors internal/binding.ListResult's three-state shape for
+	// bindings/ specifically, at the whole-bundle scope Tree owns.
+	//
+	// A root that does not exist, or is not a directory, never reaches
+	// State at all: [Service.Tree] returns a non-nil error instead
+	// ([bundle.ErrRootMissing], naming the path), the same as it always
+	// has — there is no readable directory to describe a shape for, and
+	// that case was already distinguishable before this field existed.
+	State string `json:"state"`
 }
 
 // Tree enumerates the active bundle, grouped by kind.
@@ -171,7 +190,10 @@ func (s *Service) Tree() (Tree, error) {
 	// error boundary in place, that unmounts the whole tree and the manager
 	// opens to a blank window. Every kind with zero members must still
 	// produce `"nodes":[]` on the wire.
-	t := Tree{Root: b.Root(), Groups: make([]Group, 0, len(bundle.Kinds()))}
+	t := Tree{Root: b.Root(), Groups: make([]Group, 0, len(bundle.Kinds())), State: "ok"}
+	if !b.HasKnownShape() {
+		t.State = "unrecognized"
+	}
 	for _, k := range bundle.Kinds() {
 		g := Group{Kind: k, Label: labelFor(k).Plural, Nodes: []Node{}}
 		switch k {
@@ -298,6 +320,34 @@ func (s *Service) describe(b *bundle.Bundle, ref bundle.Ref, data []byte) (Conte
 // a full Tree call.
 func (s *Service) Root() (string, error) {
 	return s.store.Resolve()
+}
+
+// SetRoot changes the active bundle root and persists it — [bundle.RootStore
+// .Save] bound to the frontend (CW-20260904-0019). See that method's own
+// doc for exactly what it does: an atomic write to the settings file under
+// state.Dir(), never anything under either bundle root.
+//
+// Every method on this Service — and on internal/binding.Service, which
+// shares the same [bundle.RootStore] — resolves the active root fresh on
+// every call rather than caching it (see the package doc), so a change
+// made here is visible to the very next Tree/Open/Save/List call with no
+// restart and no further plumbing.
+//
+// SetRoot does not validate that root is a real bundle (D8): a path typed
+// by hand and a folder chosen through a native picker are the same case
+// from this method's point of view. The caller finds out what it got from
+// the next [Service.Tree] call's State.
+func (s *Service) SetRoot(root string) error {
+	return s.store.Save(root)
+}
+
+// DefaultRoot returns the bundle Tachyon opens when nothing has been
+// chosen — the same value [bundle.DefaultRoot] computes, expanded and
+// absolute. It exists so the manager's "reset to default" affordance never
+// hardcodes [bundle.DefaultRootPath] a second time in JavaScript, which
+// would risk drifting from the one Go source of truth for it.
+func (s *Service) DefaultRoot() (string, error) {
+	return bundle.DefaultRoot()
 }
 
 // --- CW-20260903-0010: the "new artifact" entry point ---

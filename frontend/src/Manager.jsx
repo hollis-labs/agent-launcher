@@ -12,6 +12,19 @@ import NewArtifact from "./NewArtifact.jsx";
 // for why (D5, D8).
 export default function Manager({ route }) {
   const [tab, setTab] = useState(route === "settings" ? "settings" : "bundle");
+  // bundleGeneration forces <Bundle> to unmount and remount from scratch
+  // after a root change: its key changes, React discards the old instance
+  // (whatever node was open, any unsaved draft) and mounts a fresh one,
+  // whose own effect reloads the tree from the new root the same way it
+  // always loads on mount -- see BundleRootBar's onRootChanged below. This
+  // is the "no restart" half of CW-20260904-0019's acceptance criteria:
+  // it works whether the user is looking at the Bundle tab when they
+  // change the root (the visible instance is replaced immediately) or the
+  // Settings tab (the next visit to Bundle mounts fresh regardless, since
+  // the tab switch itself already unmounts/remounts -- see the ternary
+  // below -- but bumping the key here too keeps this component correct on
+  // its own, not dependent on that unrelated behavior staying true).
+  const [bundleGeneration, setBundleGeneration] = useState(0);
 
   useEffect(() => {
     const onHash = () =>
@@ -26,10 +39,114 @@ export default function Manager({ route }) {
         <h1>⌁ Tachyon</h1>
         <button onClick={() => (window.location.hash = "#/manager")}>Bundle</button>
         <button onClick={() => (window.location.hash = "#/manager/settings")}>Settings</button>
+        {/* Persistently visible in every tab, not behind a menu --
+            CW-20260904-0019. The tree pane's own root-label (below, inside
+            Bundle()) still shows the same value in context; this one is
+            what stays on screen when the Bundle tab isn't. */}
+        <BundleRootBar onRootChanged={() => setBundleGeneration((g) => g + 1)} />
       </header>
       <main className={tab === "bundle" ? "no-pad" : undefined}>
-        {tab === "settings" ? <Settings /> : <Bundle />}
+        {tab === "settings" ? <Settings /> : <Bundle key={bundleGeneration} />}
       </main>
+    </div>
+  );
+}
+
+// BundleRootBar is CW-20260904-0019's surface for "which bundle am I
+// editing, and how do I change it": T05 (CW-20260903-0009) built
+// Manager.Service.Root() and bound it to the frontend, but nothing ever
+// called it -- the same shape of gap CW-20260904-0004 found in
+// Shell.OpenManager(). This closes it, and adds the one thing that was
+// never built at all: a way to change it, via the real native macOS
+// folder picker Shell.PickBundleRoot() opens (Wails'
+// application.App.Dialog.OpenFile, CanChooseDirectories(true) -- not a
+// hand-rolled text field; see internal/shell.Service.PickBundleRoot's own
+// doc for why that's a genuine, already-available capability here and not
+// an aspiration).
+//
+// This component does not touch the tree or the bindings list itself --
+// after a successful SetRoot it only calls onRootChanged, which
+// Manager()'s bundleGeneration bump turns into a fresh <Bundle> mount
+// (and Bundle's own mount-time effect re-fetches Tree()). The palette's
+// bindings list lives in a completely separate window/webview
+// (Palette.jsx) that this component has no handle on at all; that side of
+// "no restart" is Palette.jsx's own re-fetch-on-focus, not anything this
+// bar calls.
+function BundleRootBar({ onRootChanged }) {
+  // null while the first Root() call is in flight.
+  const [root, setRoot] = useState(null);
+  const [status, setStatus] = useState(null); // {kind: 'ok'|'err', text}
+  const [busy, setBusy] = useState(false);
+  // Guards against an older request's response landing after a newer one
+  // -- the same class of ordering bug Bundle()'s currentRequestRef and
+  // treeRequestIdRef exist to prevent, applied here to "change the root"
+  // instead of "open a node" or "reload the tree".
+  const requestIdRef = useRef(0);
+
+  const loadRoot = useCallback(() => {
+    ManagerAPI.Root()
+      .then((r) => setRoot(r))
+      .catch((e) => setStatus({ kind: "err", text: String(e?.message ?? e) }));
+  }, []);
+
+  useEffect(() => {
+    loadRoot();
+  }, [loadRoot]);
+
+  // applyRoot is shared by both "Change…" (a picked directory) and "Reset
+  // to default" (Manager.DefaultRoot()'s own answer): both end the same
+  // way, a SetRoot call followed by telling Manager() to refresh.
+  const applyRoot = (dir) => {
+    const requestId = ++requestIdRef.current;
+    setBusy(true);
+    setStatus(null);
+    ManagerAPI.SetRoot(dir)
+      .then(() => {
+        if (requestIdRef.current !== requestId) return; // superseded by a newer change
+        setRoot(dir);
+        setStatus({ kind: "ok", text: "Bundle root changed." });
+        onRootChanged?.();
+      })
+      .catch((e) => {
+        if (requestIdRef.current !== requestId) return;
+        setStatus({ kind: "err", text: String(e?.message ?? e) });
+      })
+      .finally(() => {
+        if (requestIdRef.current === requestId) setBusy(false);
+      });
+  };
+
+  const choose = () => {
+    setStatus(null);
+    Shell.PickBundleRoot()
+      .then((dir) => {
+        if (!dir) return; // the user dismissed the dialog without picking one
+        applyRoot(dir);
+      })
+      .catch((e) => setStatus({ kind: "err", text: String(e?.message ?? e) }));
+  };
+
+  const resetToDefault = () => {
+    setStatus(null);
+    ManagerAPI.DefaultRoot()
+      .then((def) => applyRoot(def))
+      .catch((e) => setStatus({ kind: "err", text: String(e?.message ?? e) }));
+  };
+
+  return (
+    <div className="bundle-root-bar">
+      <span className="bundle-root-bar-label" title={root ?? ""}>
+        Bundle: <code>{root ?? "Loading…"}</code>
+      </span>
+      <button onClick={choose} disabled={busy} title="Pick a different bundle folder">
+        {busy ? "Working…" : "Change…"}
+      </button>
+      <button onClick={resetToDefault} disabled={busy} title="Use the default bundle">
+        Reset to default
+      </button>
+      {status && (
+        <span className={status.kind === "ok" ? "ok" : "err"}>{status.text}</span>
+      )}
     </div>
   );
 }
@@ -282,7 +399,26 @@ function Bundle() {
           />
         )}
         {treeError && <p className="err tree-msg">{treeError}</p>}
-        {tree && (
+        {/* CW-20260904-0019: tree.state distinguishes "this directory was
+            never a bundle" from "this bundle is genuinely empty" — two
+            situations that used to render identically (an empty tree, six
+            groups all saying "none"), which is exactly the failure mode
+            CW-20260904-0002 already fixed once for the palette's bindings
+            list and this task's own record says not to reintroduce here.
+            "unrecognized" replaces the tree entirely with a clear reason,
+            the same way Palette.jsx's "missing"/"unreadable" states
+            replace its list rather than sitting on top of it. */}
+        {tree && tree.state === "unrecognized" && (
+          <div className="tree-msg">
+            <div className="err">This doesn't look like a Cairn bundle</div>
+            <div className="muted" style={{ marginTop: 8 }}>
+              None of <code>profiles/</code>, <code>templates/</code>, <code>skills/</code>,{" "}
+              <code>hooks/</code> or <code>bindings/</code> exist under <code>{tree.root}</code>.
+              Pick a different folder above, or reset to the default bundle.
+            </div>
+          </div>
+        )}
+        {tree && tree.state !== "unrecognized" && (
           <div className="tree-groups">
             {/* ?? [] is defense in depth, not the fix: the real guarantee is
                 that internal/manager.Tree() never emits a null nodes array
