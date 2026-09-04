@@ -134,8 +134,42 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   padding: 14px 16px 10px 78px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
+  /* CW-20260904-0007: the manager has no native title bar to grab
+     (MacTitleBarHiddenInset hides it), so this header is the only drag
+     surface. This is deliberately --wails-draggable, NOT the standard
+     -webkit-app-region a generic "add a drag region" fix would reach for:
+     Wails v3.0.0-beta.16's own drag detection
+     (@wailsio/runtime src/drag.ts, isDraggableEvent) reads
+     getComputedStyle's `--wails-draggable` and never looks at
+     -webkit-app-region anywhere in the vendored module (grepped the whole
+     tree; -webkit-app-region does not appear in any Wails source at all,
+     only in two unrelated comments) -- -webkit-app-region here would
+     silently do nothing. --wails-draggable: drag makes mousedown here
+     start a real native window drag ([NSWindow
+     performWindowDragWithEvent:], webview_window_darwin.m) and, with no
+     further wiring needed, makes double-click zoom the window: drag.ts's
+     dblclick handler fires "wails:drag:doubleclick" for any
+     --wails-draggable:drag element, WebviewWindow.HandleMessage
+     (webview_window.go:826) routes that to handleTitlebarDoubleClick() ->
+     ToggleMaximise(), and on darwin Maximise()/UnMaximise() both call the
+     real AppKit [nsWindow zoom:nil] (webview_window_darwin.go:894-928) --
+     genuine native zoom, not a hand-rolled frame -- gated on the user's own
+     macOS "double-click title bar" preference (AppleActionOnDoubleClick,
+     read at webview_window_darwin.go:48) and never Fullscreen(), so this
+     cannot become Space-switching fullscreen. The traffic-light buttons are
+     native NSButton subviews AppKit composites above the WKWebView for a
+     MacTitleBarHiddenInset window, so they intercept clicks on themselves
+     before the webview (and this drag region) ever sees them, regardless of
+     this box's left edge running under them at x=0. That compositing
+     behavior is standard AppKit, not something this agent could see run --
+     a human must confirm the traffic lights still respond by hand. */
+  --wails-draggable: drag;
 }
 .manager-shell header h1 { font-size: 13px; font-weight: 600; color: var(--accent); }
+/* Every clickable element inside the drag region above must opt out or it
+   silently stops receiving clicks (CW-20260904-0007) -- currently just
+   these two buttons. Add any future interactive header element here too. */
+.manager-shell header button { --wails-draggable: no-drag; }
 .manager-shell main { flex: 1; overflow: auto; padding: 20px; min-height: 0; }
 .manager-shell main.no-pad { padding: 0; overflow: hidden; display: flex; }
 
