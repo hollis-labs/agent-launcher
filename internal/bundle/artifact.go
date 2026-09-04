@@ -136,9 +136,13 @@ func (h Hook) Ref() Ref { return Ref{Kind: KindHook, ID: string(h.Name)} }
 
 // Binding is one file under bindings/ — a saved composition.
 //
-// The per-file format is not pinned by Cairn and is owned by a later task, so
-// this type carries no fields derived from a binding's contents. bindings/ does
-// not exist in the bundle today; that enumerates as empty, not as an error.
+// This type carries no fields derived from a binding's contents on purpose:
+// internal/binding is the package that actually reads a binding's
+// profile/scope and resolves its scope alias, deliberately kept separate
+// from this package's plain, format-blind directory listing (see that
+// package's own doc for why). A missing bindings/ directory still
+// enumerates here as empty, not as an error — see this package's own doc,
+// "a missing artifact directory enumerates as empty."
 type Binding struct {
 	// Name is the file's basename, extension included.
 	Name    BindingID

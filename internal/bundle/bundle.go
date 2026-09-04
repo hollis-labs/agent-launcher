@@ -231,9 +231,9 @@ func (b *Bundle) Hooks() ([]Hook, error) {
 
 // Bindings enumerates the files directly under bindings/, sorted by name.
 //
-// bindings/ does not exist in the bundle today and its per-file format is not
-// pinned by Cairn. An absent directory is an empty result, not an error, and
-// nothing here reads or interprets a binding's contents.
+// An absent directory is an empty result, not an error, same as every other
+// artifact directory. Nothing here reads or interprets a binding's
+// contents — see internal/binding for the package that does.
 func (b *Bundle) Bindings() ([]Binding, error) {
 	names, err := b.listFiles("", dirBindings)
 	if err != nil {

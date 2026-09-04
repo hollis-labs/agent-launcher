@@ -13,16 +13,19 @@ import (
 	"github.com/hollis-labs/tachyon/internal/bundle"
 )
 
-// The census of ~/dev/projects/agent-setup as of 2026-09-03. bindings/ does
-// not exist yet; its per-file format is not pinned by Cairn and belongs to a
-// later task, so zero is the correct answer rather than a gap.
+// The census of ~/dev/projects/agent-setup as of 2026-09-03. bindings/
+// landed since this census was first written (CW-20260904-0002 / T23):
+// this package's own Bindings() does not filter by extension (the binding
+// format is not pinned by Cairn — see internal/binding for the package
+// that reads it), so liveBindings counts all 8 *.yaml files plus
+// bindings/README.md.
 const (
 	liveProfiles  = 9
 	liveRoleProse = 8
 	liveTemplates = 4
 	liveSkills    = 17
 	liveHooks     = 3
-	liveBindings  = 0
+	liveBindings  = 9
 )
 
 // TestLiveBundleCensus runs the enumeration against the real bundle.

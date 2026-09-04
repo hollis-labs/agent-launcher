@@ -45,9 +45,11 @@
 // the tree is an artifact that cannot be fixed.
 //
 // A missing artifact directory enumerates as empty rather than as an error.
-// bindings/ in particular does not exist in the bundle today; its per-file
-// format is not pinned by Cairn and is owned by a later task, so this package
-// enumerates whatever files are there and reads their bytes, nothing more.
+// bindings/ in particular carries per-file content this package does not
+// interpret — it enumerates whatever files are there and reads their bytes,
+// nothing more; internal/binding is the package that actually reads a
+// binding's profile/scope and resolves scope aliases from scopes.yaml (see
+// that package's own doc for why it stays separate from this one).
 //
 // # An empty answer is never how a missing bundle is reported
 //
