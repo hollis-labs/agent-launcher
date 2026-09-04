@@ -151,9 +151,13 @@ func mustAbs(t *testing.T, p string) string {
 // TestLiveBundleOpenSaveRoundTrip this is safe to run directly against
 // ~/dev/projects/agent-setup with no snapshot and no restore step.
 //
-// The live bundle's bindings/ does not exist (bindings live in
-// bindings.yaml — plan CW-20260518-0061, [R3]), which makes KindBinding's
-// group exactly the zero-member case the bug needed, on the real data.
+// KindBinding's group was the zero-member case the bug needed, on the real
+// data, when this test was written — the live bundle's own bindings
+// storage has since changed shape, so this may no longer be the kind that
+// actually exercises that path today. Nothing here depends on which kind
+// supplies it: this test only needs Tree() to never marshal a Go-nil Nodes
+// slice as null, for whichever kind is empty against the bundle it runs
+// against.
 //
 //	TACHYON_LIVE_BUNDLE=1 go test ./internal/manager/ -run TestLiveBundleTreeNeverMarshalsNullNodes -v
 func TestLiveBundleTreeNeverMarshalsNullNodes(t *testing.T) {

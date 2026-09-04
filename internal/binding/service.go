@@ -6,10 +6,23 @@ import (
 	"github.com/hollis-labs/tachyon/internal/bundle"
 )
 
-// fileName is bindings.yaml's name within a bundle root — not
-// bundle.dirBindings, the bindings/ directory internal/bundle enumerates and
-// this package deliberately never touches (see the package doc).
+// fileName is this package's one bindings file's name within a bundle root
+// — not bundle.dirBindings, the bindings/ directory internal/bundle
+// enumerates and this package deliberately never touches (see the package
+// doc). It is the single place in Tachyon that spells out the on-disk
+// name; everything else, in this package or any other, gets a [Store] from
+// [Open] rather than building this path itself (T24 — CW-20260904-0003 —
+// closed the one caller, internal/launch, that used to keep its own copy).
 const fileName = "bindings.yaml"
+
+// Open returns a [Store] over the active bindings file under bundleRoot,
+// without the CRUD surface [Service] binds to JS (List/Create/Update/
+// Delete). It is the one way anything outside this package may read or
+// write bindings directly: [Service.open] itself now calls it too, so
+// there is exactly one place, [fileName], that constructs this path.
+func Open(bundleRoot string) Store {
+	return NewFileStore(filepath.Join(bundleRoot, fileName))
+}
 
 // Service is bound to the frontend as a Wails service: the palette's surface
 // to the active bundle's bindings. Its exported methods are callable from
@@ -20,14 +33,14 @@ const fileName = "bindings.yaml"
 // fixed path or an already-open [Store]: every call resolves the active
 // bundle root fresh and opens a new [FileStore] over it, so the same bundle
 // root the manager reads is the one bindings are read from, and a root
-// change (or an external edit to bindings.yaml) is visible on the very next
-// call.
+// change (or an external edit to the bindings file) is visible on the very
+// next call.
 type Service struct {
 	store bundle.RootStore
 }
 
-// NewService returns a Service that reads and writes bindings.yaml in
-// whichever bundle store.Resolve() names.
+// NewService returns a Service that reads and writes the active bundle's
+// bindings file, in whichever bundle store.Resolve() names.
 func NewService(store bundle.RootStore) *Service {
 	return &Service{store: store}
 }
@@ -37,7 +50,7 @@ func (s *Service) open() (Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewFileStore(filepath.Join(root, fileName)), nil
+	return Open(root), nil
 }
 
 // List returns every binding in the active bundle, sorted by name, Scope

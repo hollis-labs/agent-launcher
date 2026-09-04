@@ -13,13 +13,14 @@ import (
 
 // newSparseFixture builds a bundle with exactly one profile and nothing
 // else — no templates/roles, no templates, no skills, no hooks, no
-// bindings directory at all. This is the shape that matters: it is not a
-// synthetic edge case, it is the real ~/dev/projects/agent-setup today for
-// bindings specifically (bindings live in bindings.yaml, not a bindings/
-// directory, so KindBinding always enumerates empty against the live
-// bundle), and this fixture generalizes the same absence to every other
-// kind so a regression in any one of them is caught here rather than only
-// in whichever kind happens to be empty on a given day.
+// bindings directory at all. This fixture generalizes that absence to
+// every kind so a regression in any one of them is caught here rather than
+// only in whichever kind happens to be empty on a given day. (It no longer
+// claims to describe the live ~/dev/projects/agent-setup bundle for
+// bindings specifically — that bundle's own bindings storage has changed
+// shape since this comment was first written; this fixture's job was
+// always the synthetic zero-member case, not a standing claim about what
+// the live bundle currently looks like.)
 //
 // newFixture in manager_test.go always populates every kind, including
 // bindings/ — which is exactly why it did not catch the bug this file

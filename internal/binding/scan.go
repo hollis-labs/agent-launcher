@@ -48,7 +48,7 @@ type bindingEntry struct {
 	profile, scope     fieldSpan // scope.value is RAW: not alias-resolved
 }
 
-// document is one parse of bindings.yaml.
+// document is one parse of the bindings file.
 type document struct {
 	// aliases is the scopes: map, key -> literal value. Used only to resolve
 	// a binding entry's raw scope at read time (see resolve.go) — never
@@ -86,7 +86,7 @@ func (d *document) binding(e bindingEntry) Binding {
 	return Binding{Name: e.name, Profile: e.profile.value, Scope: resolveScope(e.scope.value, d.aliases)}
 }
 
-// parseDocument scans bindings.yaml's bytes into a [document]. It is a
+// parseDocument scans the bindings file's bytes into a [document]. It is a
 // narrow, line-oriented reader, not a YAML parser — see the package doc for
 // why: a scan this poor at representing the document cannot become a save
 // path by accident, and every write in this package goes through byte spans

@@ -25,7 +25,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/boot"
@@ -33,15 +32,6 @@ import (
 	"github.com/hollis-labs/tachyon/internal/compose"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
-
-// bindingsFileName is bindings.yaml's name within a bundle root -- the same
-// constant internal/binding/service.go keeps to itself. Duplicated rather
-// than imported: internal/binding.Service does not export a way to open a
-// [binding.Store] without also exposing List/Create/Update/Delete to JS,
-// none of which this package wants on its own surface, and
-// internal/binding itself does not export its own fileName. See
-// [Service.resolveBinding].
-const bindingsFileName = "bindings.yaml"
 
 // harnessBinary maps a [boot.Result.Provider] value to the binary
 // SpawnITerm2 actually execs. "claude" is the only provider Cairn's own
@@ -103,8 +93,10 @@ func (s *Service) Launch(name string) error {
 	return launch(context.Background(), b, bundleRoot, bootRoot, boot.ExecRunner(cairnPath), boot.SpawnITerm2)
 }
 
-// resolveBinding opens a fresh [binding.FileStore] over the active
-// bundle's bindings.yaml -- mirroring internal/binding.Service.open() --
+// resolveBinding opens a [binding.Store] over the active bundle via
+// [binding.Open] -- the same constructor internal/binding.Service.open()
+// itself now calls, so this package keeps no copy of its own of the
+// bindings file's name (T24 closed that leak; see [binding.Open]'s doc) --
 // and looks name up in it, returning both the resolved binding and the
 // bundle root it came from, so Launch does not resolve the same root
 // twice (compose.Composition.Bundle needs it too).
@@ -113,8 +105,7 @@ func (s *Service) resolveBinding(name string) (binding.Binding, string, error) {
 	if err != nil {
 		return binding.Binding{}, "", fmt.Errorf("launch: resolving bundle root: %w", err)
 	}
-	store := binding.NewFileStore(filepath.Join(root, bindingsFileName))
-	b, err := store.Get(name)
+	b, err := binding.Open(root).Get(name)
 	if err != nil {
 		return binding.Binding{}, "", fmt.Errorf("launch: resolving binding %q: %w", name, err)
 	}
@@ -135,10 +126,18 @@ type spawnFunc func(argv []string, cwd string) error
 // fake spawn func instead of a real cairn binary and a real terminal.
 //
 // b.Name becomes Composition.Target, not b.Profile: `cairn boot <name>`
-// checks bindings.yaml first (see that file's own header comment), which
-// is precisely how b's own Profile and Scope get resolved server-side --
-// so Composition.Scope is deliberately left at its zero value here rather
-// than set from b.Scope. Setting it would send an explicit --scope that
+// resolves the binding itself, server-side, before this package's own
+// resolveBinding call ever runs -- via Cairn's own catalog package (a
+// directory of files read whole, per its own doc "the catalog is the
+// store"), which as of this writing already reads a bindings/ directory of
+// one file per binding directly off disk, not this package's single
+// bindings file (see internal/binding's doc on "the interface is the
+// contract, not the file format" for what this package reads instead, and
+// why, and CW-20260904-0002 / T23 for migrating this package's own reader
+// to match). Either way, that server-side resolution is precisely how b's
+// own Profile and Scope get resolved -- so Composition.Scope is
+// deliberately left at its zero value here rather than set from b.Scope.
+// Setting it would send an explicit --scope that
 // merely restates what Cairn already resolves on its own from the binding
 // it just looked up by name. cmd/tachyon's own Config.Scope (T11) makes
 // the identical choice: it leaves Scope empty by default, only ever
