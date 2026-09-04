@@ -126,6 +126,44 @@ export default function Palette() {
 
   const activeTarget = filtered[activeIndex] ?? null;
 
+  // resetComposeDraft clears every compose-form field back to its initial,
+  // empty state. Called from two places: attemptLaunch's success path
+  // (below — a spent composition must not silently reapply to a later
+  // launch), and the window "blur" listener just below this component's
+  // other effects (an *abandoned* composition — Escape, or clicking away —
+  // must not silently survive to reapply to a completely different binding
+  // the next time the palette is summoned).
+  //
+  // Why "blur" specifically: this window is opened with HideOnFocusLost —
+  // see internal/shell/shell.go's paletteOptions — so for THIS window,
+  // losing focus and being hidden are the same event, by construction, not
+  // a heuristic. Wails routes HideOnFocusLost through window.Hide()
+  // (pkg/application/webview_window.go's setupHideOnFocusLost), the exact
+  // same call Escape's own key binding makes; ordering a window out also
+  // resigns its key/focus status as a side effect, so the DOM "blur" this
+  // listens for should fire for both dismiss paths, not just the
+  // focus-loss one. This is inferred from Wails' own source, not observed
+  // in a running window — there is no way to watch a live macOS window
+  // from here. If "blur" ever turns out not to fire for one of these
+  // paths, the practical consequence is exactly the pre-existing bug this
+  // is fixing (a stale draft can reach a later launch), not a new
+  // regression — so this is a strict improvement even if imperfect.
+  function resetComposeDraft() {
+    setSkills([]);
+    setSkillDraft("");
+    setScope("");
+    setParts([]);
+    setPartDraft("");
+    setSets([]);
+    setSetSlotDraft("");
+    setSetValueDraft("");
+  }
+
+  useEffect(() => {
+    window.addEventListener("blur", resetComposeDraft);
+    return () => window.removeEventListener("blur", resetComposeDraft);
+  }, []);
+
   // attemptLaunch resolves the highlighted binding plus the full compose
   // draft through Launch.Composition. It is the one place this component
   // calls Launch.* — every field's Enter handler either commits pending
@@ -158,15 +196,12 @@ export default function Palette() {
       .then(() => {
         // A spent composition must not silently reapply to whichever
         // binding happens to be highlighted the next time the palette is
-        // summoned.
-        setSkills([]);
-        setSkillDraft("");
-        setScope("");
-        setParts([]);
-        setPartDraft("");
-        setSets([]);
-        setSetSlotDraft("");
-        setSetValueDraft("");
+        // summoned. (Shell.HidePalette below will also trigger the "blur"
+        // listener's own resetComposeDraft call once the window actually
+        // hides — this explicit call is not redundant with that, it's what
+        // makes the fields visibly clear immediately, without waiting on
+        // the hide round-trip.)
+        resetComposeDraft();
         return Shell.HidePalette();
       })
       .catch((err) => setLaunchError(String(err?.message ?? err)))
