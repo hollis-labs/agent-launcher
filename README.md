@@ -184,7 +184,10 @@ For the required macOS verification, enable `Tachyon.app` once in **System
 Settings → Privacy & Security → Accessibility**, launch it with the command
 above, and observe all of the following:
 
-1. The configured global hotkey (default `Cmd+Shift+T`) summons the palette.
+1. The configured global hotkey summons the palette. An existing installation
+   uses a valid value saved in Settings or `shell.json`; a fresh preferences
+   file, or a missing or invalid saved value, falls back to
+   `Ctrl+Option+Space`.
 2. The Tachyon tray icon renders; left-click toggles the palette, and
    right-click shows Open Manager, Settings and Quit.
 3. After quitting, rerun `./scripts/build-macos.sh` and launch the same app path
