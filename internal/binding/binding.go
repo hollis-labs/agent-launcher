@@ -9,8 +9,8 @@ import (
 // Binding is one named {profile, scope} pair. Scope is always a path —
 // absolute or "~/"-relative — never an alias name. See the package doc.
 type Binding struct {
-	// Name is the binding's id: the map key in bindings.yaml, and the
-	// argument `cairn boot <name>` takes.
+	// Name is the binding's id: the map key in the bundle's one bindings
+	// file (see [fileName]), and the argument `cairn boot <name>` takes.
 	Name string `json:"name"`
 	// Profile is the boot target: a profile id, resolved the same way a bare
 	// `cairn boot <profile>` would resolve it. This package does not check
@@ -30,7 +30,7 @@ var ErrNotFound = errors.New("binding: not found")
 var ErrExists = errors.New("binding: already exists")
 
 // nameRe is what a binding's Name must match: the same plain-scalar,
-// unquoted style every existing key in bindings.yaml already uses. This is
+// unquoted style every existing key in the bindings file already uses. This is
 // deliberately stricter than YAML allows, because a name accepted here is
 // written back as a bare map key with no quoting or escaping.
 var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
@@ -38,7 +38,7 @@ var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 // Validate reports whether b can be written at all: a well-formed name, and
 // non-empty Profile and Scope. It does not check that Profile names a real
 // profile or that Scope exists on disk (D8) — only that the values are
-// structurally safe to place in bindings.yaml's flow-map style.
+// structurally safe to place in the bindings file's flow-map style.
 func (b Binding) Validate() error {
 	if !nameRe.MatchString(b.Name) {
 		return fmt.Errorf("binding: invalid name %q: must match %s", b.Name, nameRe.String())

@@ -7,29 +7,38 @@
 // The target architecture (plan CW-20260518-0061, D4) described bindings as
 // one file per binding under a bindings/ directory. [R3], corrected
 // 2026-09-03: that directory does not exist. What exists, and what Cairn
-// reads today, is a single top-level file — <bundle root>/bindings.yaml —
-// holding a `bindings:` map and a `scopes:` alias map. Chrispian chose to
-// adopt the existing file rather than migrate it.
+// read as of this package's writing, is a single top-level file directly
+// under the bundle root (see [fileName] for its exact name) holding a
+// `bindings:` map and a `scopes:` alias map. Chrispian chose to adopt the
+// existing file rather than migrate it.
+//
+// (T24 — CW-20260904-0003 — update: as of 2026-09-03, Cairn's real
+// bindings/ directory has since landed on the live bundle this package's
+// own tests read, ~/dev/projects/agent-setup — [fileName] is gone from
+// it. This package still only reads [fileName]; migrating this package's
+// read path to the bindings/ directory is CW-20260904-0002 (T23), not
+// this one. See "A missing file is not evidence of anything," below, for
+// what that means for a bundle in exactly this state today.)
 //
 // internal/bundle's Bindings() deliberately still enumerates the bindings/
 // directory and returns empty against the live bundle — see that package's
 // bundle.go and its live_test.go census, which pins liveBindings = 0. That is
 // not a bug this package works around; it is where the plan drew the line:
-// internal/bundle owns the six-artifact-kind tree, bindings.yaml is a
-// different shape entirely (two maps, not a directory of files), and giving
-// bundle a seventh, structurally different read path would blur the one
-// property that makes it testable — that it is a plain filesystem walk with
-// no format opinions. This package owns bindings.yaml on its own, and reads
-// the bundle root bundle.RootStore already persists (see [Service]) rather
-// than duplicating that setting.
+// internal/bundle owns the six-artifact-kind tree, this package's bindings
+// file is a different shape entirely (two maps, not a directory of files),
+// and giving bundle a seventh, structurally different read path would blur
+// the one property that makes it testable — that it is a plain filesystem
+// walk with no format opinions. This package owns its one bindings file on
+// its own, and reads the bundle root bundle.RootStore already persists (see
+// [Service]) rather than duplicating that setting.
 //
-// # The interface is the contract, not bindings.yaml
+// # The interface is the contract, not the file format
 //
 // [Store] is load, list, write — [Binding] in, [Binding] out. Nothing above
 // Store may know that today's binding lives in one YAML file rather than one
 // file per binding, a database row, or whatever Cairn's bindings/ directory
 // ends up being once its format is pinned. [FileStore] is the only thing in
-// this package, or in Tachyon, that has ever heard of bindings.yaml.
+// this package, or in Tachyon, that has ever heard of [fileName].
 // [MemStore] is a second, deliberately trivial Store — an in-memory map —
 // that exists to prove that claim: contract_test.go runs one shared test
 // suite against both, so "swap the storage format" is demonstrated to be a
@@ -38,7 +47,7 @@
 //
 // # Scope is always a path
 //
-// bindings.yaml's `bindings:` entries carry a `scope` value that today is
+// The bindings file's `bindings:` entries carry a `scope` value that today is
 // often an alias — a key into the file's own `scopes:` map — rather than a
 // literal path (`{ profile: planner, scope: chrispian }`, where `chrispian`
 // is a `scopes:` key, not `~/dev/chrispian`). The plan is explicit that
@@ -70,7 +79,7 @@
 //
 // # Bytes in, bytes out still governs — at the entry, not just the file
 //
-// bindings.yaml is hand-authored: a load-bearing header comment, inline-flow
+// The bindings file is hand-authored: a load-bearing header comment, inline-flow
 // mappings (`{ profile: planner, scope: chrispian }`), alignment padding, and
 // section comments inside the `bindings:` map ("Carried over from the
 // previous system.", "The conductor holds no scope..."). Decoding the whole
@@ -105,7 +114,45 @@
 //
 // The target architecture says a binding may optionally carry a skills list,
 // and that `--save-as` round-trips `--skill`, but also says how that field is
-// spelled in bindings.yaml is undefined — the eight live entries carry only
-// {profile, scope}. This package does not invent a spelling: [Binding] has no
-// skills field, and neither Create nor Update accepts one.
+// spelled in the bindings file is undefined — the eight live entries carry
+// only {profile, scope}. This package does not invent a spelling: [Binding]
+// has no skills field, and neither Create nor Update accepts one.
+//
+// # A missing file is not evidence of anything
+//
+// [FileStore.List] and [FileStore.Get] have always treated an absent
+// [fileName] the same as an existing-but-empty one: no error, nothing
+// found. [FileStore.Path]'s own doc says so, [Open]'s doc-linked contract
+// promises it, and contract_test.go's "a fresh store starts empty" runs
+// this exact assertion against both [FileStore] and [MemStore] as the
+// proof that swapping storage formats is safe. [FileStore.Create] depends
+// on it directly: a bundle that has never saved a binding has no
+// [fileName] on disk at all, and Create's whole job on that bundle is to
+// write one for the first time.
+//
+// T24 (CW-20260904-0003) went looking for a way to make an absent file
+// report a real error instead — specifically so the palette shows "I
+// cannot read your bindings" rather than a bare empty list when a bundle's
+// bindings have become unreadable — and did not find one this package can
+// make safely. The two real-world causes of "no [fileName] on this bundle
+// root" are, at this package's own boundary, bit-for-bit indistinguishable:
+// a bundle that has never saved a binding, and a bundle whose bindings used
+// to live in [fileName] and do not anymore (exactly the live bundle's own
+// state after Cairn's bindings/ directory landed — see the R3 update
+// above). Telling them apart needs information this package deliberately
+// does not have: either a second, format-specific fact about what replaced
+// [fileName] (which would mean this package starting to know about
+// bindings/ before T23 migrates it, precisely the coupling the "why this
+// package exists" section above draws the line against), or a broader
+// "does this bundle otherwise look populated" signal borrowed from
+// internal/bundle (a real option, but a bigger interface change than a
+// single task should make unilaterally, and it would still only be a
+// heuristic).
+//
+// So this package still returns (empty, nil) for a missing file, on
+// purpose, unchanged. What did change: internal/testbundle gives Tachyon's
+// own tests a way to demand more than "empty is fine" when a test already
+// knows which bindings a specific, real bundle root ought to contain — see
+// that package's own doc for why a test can make this call safely where
+// this package cannot.
 package binding

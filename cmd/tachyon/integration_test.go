@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hollis-labs/tachyon/internal/boot"
+	"github.com/hollis-labs/tachyon/internal/testbundle"
 )
 
 // TestRunAgainstRealCairn exercises this command's own [Run] end to end
@@ -20,11 +21,17 @@ import (
 // TestRunNeverMovesCurrentAside in debug_test.go for that same property
 // proven deterministically).
 //
-// It skips, rather than fails, when a prerequisite is absent from the
-// machine running it: cairn not on PATH, or
-// ~/dev/projects/agent-setup/bindings.yaml not present. Nothing here writes
-// into that bundle — --profile only reads it — and every path this test
-// writes to lives under its own t.TempDir() boot root.
+// It skips, with a message saying why, only when a prerequisite is
+// genuinely absent from the machine running it: cairn not on PATH, or the
+// ~/dev/projects/agent-setup bundle itself not present at all. A bundle
+// that IS present but whose bindings this build of Tachyon cannot read —
+// missing, unreadable, or in a shape it does not understand — is a
+// different condition and FAILS the test instead; see
+// [testbundle.Resolve] for that distinction (the same one
+// internal/boot/reconcile_test.go relies on), proven directly by
+// internal/testbundle's own unit tests. Nothing here writes into that
+// bundle — --profile only reads it — and every path this test writes to
+// lives under its own t.TempDir() boot root.
 func TestRunAgainstRealCairn(t *testing.T) {
 	cairnPath, err := exec.LookPath("cairn")
 	if err != nil {
@@ -36,14 +43,31 @@ func TestRunAgainstRealCairn(t *testing.T) {
 		t.Skipf("no home directory on this machine: %v", err)
 	}
 	bundleRoot := filepath.Join(home, "dev", "projects", "agent-setup")
-	if _, err := os.Stat(filepath.Join(bundleRoot, "bindings.yaml")); err != nil {
-		t.Skipf("no bindings.yaml under %s (agent-setup bundle not present on this machine): %v", bundleRoot, err)
+
+	bindings, skip, err := testbundle.Resolve(bundleRoot)
+	if skip {
+		t.Skipf("no bundle at %s (agent-setup not present on this machine), skipping the real-binary check", bundleRoot)
+	}
+	if err != nil {
+		t.Fatalf("bundle at %s is present but its bindings cannot be read -- this is exactly the break CW-20260904-0003 (T24) exists to catch loudly, not silence: %v", bundleRoot, err)
 	}
 
-	// eng-nanite is a saved binding in agent-setup's bindings.yaml as of
+	// eng-nanite was a saved binding in agent-setup's bindings storage as of
 	// 2026-09-03 — see internal/boot/reconcile_test.go, which relies on the
-	// same binding for the same reason.
+	// same binding for the same reason, and the guard above (which now
+	// fails loudly, not silently, once that stops being true) rather than
+	// this comment for the current state.
 	const target = "eng-nanite"
+	found := false
+	for _, b := range bindings {
+		if b.Name == target {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("bundle at %s is readable but has no binding named %q -- update this test's target, or the bundle", bundleRoot, target)
+	}
 	scratchRoot := t.TempDir()
 	cfg := Config{Target: target, Bundle: bundleRoot, BootRoot: scratchRoot}
 	runner := boot.ExecRunner(cairnPath)

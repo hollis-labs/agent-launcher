@@ -10,19 +10,19 @@ import (
 	"strings"
 )
 
-// FileStore is the real, live [Store]: bindings.yaml at Path, edited
-// surgically. It caches nothing — every call re-reads the file from disk —
+// FileStore is the real, live [Store]: the bundle's one bindings file
+// ([fileName]) at Path, edited surgically. It caches nothing — every call re-reads the file from disk —
 // matching internal/bundle.Bundle and internal/manager.Service's identical
 // choice, and for the same reason: the user (or Cairn, or a git checkout)
 // can change the file between calls, and there is no watcher to tell this
 // package so.
 type FileStore struct {
-	// Path is the bindings.yaml file. It need not exist yet: List and Get
+	// Path is the bindings file. It need not exist yet: List and Get
 	// then behave as though it were empty, and Create writes it fresh.
 	Path string
 }
 
-// NewFileStore returns a [Store] backed by the bindings.yaml at path.
+// NewFileStore returns a [Store] backed by the bindings file at path.
 func NewFileStore(path string) *FileStore { return &FileStore{Path: path} }
 
 var _ Store = (*FileStore)(nil)
@@ -226,7 +226,7 @@ func isSafePlainScalar(v string) bool {
 // directory, then an os.Rename, so a crash or a concurrent read mid-write
 // never observes a half-written file. Mirrors internal/bundle's identical
 // pattern in Bundle.Write and RootStore.Save; this package does not import
-// bundle for it because bindings.yaml is not one of the six kinds bundle
+// bundle for it because the bindings file is not one of the six kinds bundle
 // enumerates (see the package doc) — there is no [bundle.Ref] for it to
 // resolve.
 func atomicWrite(path string, data []byte) error {

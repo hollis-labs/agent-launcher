@@ -77,9 +77,10 @@ type entry struct {
 // One entry per artifact kind [New] knows how to create today. Adding
 // bindings, once CW-20260903-0011 (T07) settles what a binding actually is:
 // add one more entry here, keyed bundle.KindBinding, with a relPath function
-// (the bundle-relative path a new binding lands at — one row inside
-// bindings.yaml if T07 keeps [R3]'s single-file shape, or a path under some
-// future bindings/ directory, whichever T07's interface actually says) and a
+// (the bundle-relative path a new binding lands at — a row inside the
+// bundle's own bindings storage, in whatever shape it is by the time this
+// lands: [R3]'s single file, or a path under some directory of one file per
+// binding, whichever internal/binding's interface actually says) and a
 // scaffold function for its starting content. Nothing else in this package —
 // not New, not SupportedKinds — and nothing in internal/manager's
 // NewArtifact/NewArtifactKinds wrapper needs to change: the whole dispatch
