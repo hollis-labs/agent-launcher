@@ -1,6 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Binding, Launch, Manager, Project, Shell } from "./bridge.js";
 import { acceptTopSuggestion } from "./autocomplete.js";
+import {
+  compositionDraftReducer,
+  compositionInput,
+  createCompositionDraft,
+} from "./compositionDraft.js";
 
 // The palette lists the active bundle's bindings, filterable by name, and
 // lets the user move a selection over them with the mouse or the arrow
@@ -26,13 +31,13 @@ import { acceptTopSuggestion } from "./autocomplete.js";
 // # THE CORRECTNESS PROPERTY: skills (and prompts) are additive only, never
 // inherited
 //
-// `skills` below is a plain array of strings the user typed, starting
-// empty on every mount (useState([])) and growing ONLY through
-// addSkill/removeSkill, both wired only to direct user actions (the
+// `skills` in the composition state is a plain array of strings the user
+// typed, starting empty with every new draft and growing ONLY through
+// ADD_SKILLS/REMOVE_SKILL, both dispatched only by direct user actions (the
 // skills draft input's Enter, and a chip's own remove button). Nothing in
-// this file ever calls setSkills from a binding, a profile, or any other
-// data this window reads -- and there would be nothing to seed it from
-// even if something tried: the ListResult Binding.List() resolves to
+// this file seeds skills from a binding, a profile, or any other data this
+// window reads -- and there would be nothing to seed it from even if
+// something tried: the ListResult Binding.List() resolves to
 // carries only { name, profile, scope } per binding (internal/binding.Binding
 // has no skills field at all -- see internal/launch's own package doc and
 // TestBindingCarriesNoSkillsFieldToSeedFrom). Cairn's own --skill flag is
@@ -44,7 +49,7 @@ import { acceptTopSuggestion } from "./autocomplete.js";
 // never a picture of what the target already has.
 //
 // `prompts` (CW-20260904-0006) is built the identical way, through
-// addPrompts/removePrompt only, for the identical reason: Cairn's own
+// ADD_PROMPTS/REMOVE_PROMPT only, for the identical reason: Cairn's own
 // --prompt flag documents itself as "Additive only, for the reason --skill
 // is", and internal/binding.Binding has no prompts field either -- see
 // TestBindingCarriesNoPromptsFieldToSeedFrom. The prompts field's label
@@ -71,8 +76,8 @@ export default function Palette() {
   // rejects rather than resolving — see internal/binding.Service.List's
   // doc on when it returns a non-nil error instead of State).
   const [listResult, setListResult] = useState(null);
-  const [launchError, setLaunchError] = useState("");
-  const [launching, setLaunching] = useState(false);
+  const [directLaunchError, setDirectLaunchError] = useState("");
+  const [directLaunching, setDirectLaunching] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef(null);
@@ -91,30 +96,49 @@ export default function Palette() {
   const [projects, setProjects] = useState([]);
   const [suggestionErrors, setSuggestionErrors] = useState({});
 
-  // --- compose-form draft state (CW-20260903-0017) -----------------------
-  // One shared modal draft, layered on top of the binding captured when its
-  // Compose button was clicked — not per-binding state — since these are
-  // extra flags added at launch time, not a property of a row. See this
-  // file's own header comment for why `skills` in particular must never be
-  // seeded from anything but addSkill.
-  const [skills, setSkills] = useState([]); // string[] — additive only
-  const [skillDraft, setSkillDraft] = useState("");
-  const [prompts, setPrompts] = useState([]); // string[] — additive only (CW-20260904-0006)
-  const [promptDraft, setPromptDraft] = useState("");
-  const [scope, setScope] = useState(""); // "" omits --scope entirely
-  const [parts, setParts] = useState([]); // string[] — additional --with values
-  const [partDraft, setPartDraft] = useState("");
-  const [sets, setSets] = useState([]); // {slot, value}[] — one --set per entry
-  const [setSlotDraft, setSetSlotDraft] = useState("");
-  const [setValueDraft, setSetValueDraft] = useState("");
+  // The modal, its immutable target, and all launch-only fields form one
+  // lifecycle. Native dismissal marks the open draft as retained; only an
+  // explicit discard or successful composition launch consumes it.
+  const [composition, dispatchComposition] = useReducer(
+    compositionDraftReducer,
+    undefined,
+    createCompositionDraft,
+  );
+  // Set synchronously before crossing the Wails bridge. This closes the
+  // small render gap where two Enter events could start the same draft, and
+  // lets Discard invalidate an outstanding result before React rerenders.
+  const activeCompositionLaunchRef = useRef(null);
+  const {
+    skills,
+    skillDraft,
+    prompts,
+    promptDraft,
+    scope,
+    parts,
+    partDraft,
+    sets,
+    setSlotDraft,
+    setValueDraft,
+    open: composeOpen,
+    retained: composeRetained,
+    target: composeTarget,
+    targetDraft: baseProfile,
+    launchError,
+  } = composition;
+  const bindingless = composition.mode === "profile";
+  const composeBinding = composition.mode === "binding" ? composeTarget : "";
+  const launching = directLaunching || composition.launching;
 
-  // CW-20260904-0029 adds one explicit second target mode. false preserves
-  // the existing highlighted-binding behavior; true means no binding is
-  // selected and baseProfile is sent as CompositionInput.Target instead.
-  const [bindingless, setBindingless] = useState(false);
-  const [baseProfile, setBaseProfile] = useState("");
-  const [composeOpen, setComposeOpen] = useState(false);
-  const [composeBinding, setComposeBinding] = useState("");
+  const updateCompositionField = (field, value) => {
+    dispatchComposition({ type: "UPDATE_FIELD", field, value });
+  };
+  const setBaseProfile = (value) => dispatchComposition({ type: "SET_TARGET_DRAFT", value });
+  const setSkillDraft = (value) => updateCompositionField("skillDraft", value);
+  const setPromptDraft = (value) => updateCompositionField("promptDraft", value);
+  const setScope = (value) => updateCompositionField("scope", value);
+  const setPartDraft = (value) => updateCompositionField("partDraft", value);
+  const setSetSlotDraft = (value) => updateCompositionField("setSlotDraft", value);
+  const setSetValueDraft = (value) => updateCompositionField("setValueDraft", value);
 
   useEffect(() => {
     document.body.classList.add("palette");
@@ -224,52 +248,20 @@ export default function Palette() {
     path: view.project.path,
   }));
 
-  // resetComposeDraft clears every compose-form field back to its initial,
-  // empty state. Called from attemptLaunch's success path (a spent
-  // composition must not silently reapply), the window "blur" listener
-  // just below (today's dismissal behavior), and the explicit start-from-
-  // nothing action (T33 says that action begins a new draft).
-  //
-  // Why "blur" specifically: this window is opened with HideOnFocusLost —
-  // see internal/shell/shell.go's paletteOptions — so for THIS window,
-  // losing focus and being hidden are the same event, by construction, not
-  // a heuristic. Wails routes HideOnFocusLost through window.Hide()
-  // (pkg/application/webview_window.go's setupHideOnFocusLost), the exact
-  // same call Escape's own key binding makes; ordering a window out also
-  // resigns its key/focus status as a side effect, so the DOM "blur" this
-  // listens for should fire for both dismiss paths, not just the
-  // focus-loss one. This is inferred from Wails' own source, not observed
-  // in a running window — there is no way to watch a live macOS window
-  // from here. If "blur" ever turns out not to fire for one of these
-  // paths, the practical consequence is exactly the pre-existing bug this
-  // is fixing (a stale draft can reach a later launch), not a new
-  // regression — so this is a strict improvement even if imperfect.
-  function resetComposeDraft() {
-    setLaunchError("");
-    setSkills([]);
-    setSkillDraft("");
-    setPrompts([]);
-    setPromptDraft("");
-    setScope("");
-    setParts([]);
-    setPartDraft("");
-    setSets([]);
-    setSetSlotDraft("");
-    setSetValueDraft("");
-    setBaseProfile("");
-    setBindingless(false);
-    setComposeOpen(false);
-    setComposeBinding("");
-  }
-
+  // Escape, click-away, the global hotkey, and native focus loss all hide
+  // this Wails window rather than unmounting it. A window blur therefore
+  // marks an open modal as retained but deliberately leaves every draft
+  // field and its target intact for the next summon.
   useEffect(() => {
-    window.addEventListener("blur", resetComposeDraft);
-    return () => window.removeEventListener("blur", resetComposeDraft);
+    const retainOpenDraft = () => dispatchComposition({ type: "HIDE" });
+    window.addEventListener("blur", retainOpenDraft);
+    return () => window.removeEventListener("blur", retainOpenDraft);
   }, []);
 
-  // attemptLaunch sends either the binding captured by the modal, the
-  // highlighted binding used by search+Enter, or the explicitly entered
-  // bare profile plus the full compose draft through Launch.Composition.
+  // attemptLaunch sends the target captured by the modal plus its full
+  // compose draft through Launch.Composition. A one-time draft first uses
+  // Enter (or the footer action) to capture its chosen base profile; that
+  // target is immutable until the person explicitly discards the draft.
   // Every field's Enter handler either commits pending
   // text into the draft (skills/parts/sets — see each control below) or,
   // when there is nothing pending to commit, falls through to this
@@ -277,11 +269,18 @@ export default function Palette() {
   // further or launches it, never both at once and never something a
   // person did not ask for.
   function attemptLaunch() {
-    if (launching) return;
-    const target = bindingless ? baseProfile.trim() : composeOpen ? composeBinding : activeTarget?.name;
-    if (!target) return;
-    setLaunchError("");
-    setLaunching(true);
+    if (launching || activeCompositionLaunchRef.current !== null) return;
+    if (bindingless && !composeTarget) {
+      if (!baseProfile.trim()) return;
+      dispatchComposition({ type: "CAPTURE_PROFILE" });
+      requestAnimationFrame(() => partDraftRef.current?.focus());
+      return;
+    }
+    const input = compositionInput(composition);
+    if (!input) return;
+    const draftId = composition.draftId;
+    activeCompositionLaunchRef.current = draftId;
+    dispatchComposition({ type: "LAUNCH_START", draftId });
     // Fire-and-forget from the palette's own point of view too:
     // LaunchComposition resolves once iTerm2 has been asked to open, not
     // once a session is running inside it — internal/launch.Service holds
@@ -290,27 +289,25 @@ export default function Palette() {
     // open and show why, rather than dismissing on a launch that didn't
     // happen, and leave the draft exactly as it was so the person can fix
     // whatever cairn's stderr says and try again without retyping it.
-    Launch.Composition({
-      target,
-      skills,
-      prompts,
-      scope: scope.trim(),
-      sets,
-      parts,
-    })
+    Launch.Composition(input)
       .then(() => {
-        // A spent composition must not silently reapply to whichever
-        // binding happens to be highlighted the next time the palette is
-        // summoned. (Shell.HidePalette below will also trigger the "blur"
-        // listener's own resetComposeDraft call once the window actually
-        // hides — this explicit call is not redundant with that, it's what
-        // makes the fields visibly clear immediately, without waiting on
-        // the hide round-trip.)
-        resetComposeDraft();
+        // A person may explicitly discard while a launch is outstanding.
+        // Its late completion must never clear a replacement draft or hide
+        // the palette out from under it.
+        if (activeCompositionLaunchRef.current !== draftId) return undefined;
+        activeCompositionLaunchRef.current = null;
+        dispatchComposition({ type: "LAUNCH_SUCCESS", draftId });
         return Shell.HidePalette();
       })
-      .catch((err) => setLaunchError(String(err?.message ?? err)))
-      .finally(() => setLaunching(false));
+      .catch((err) => {
+        if (activeCompositionLaunchRef.current !== draftId) return;
+        activeCompositionLaunchRef.current = null;
+        dispatchComposition({
+          type: "LAUNCH_FAILURE",
+          draftId,
+          error: String(err?.message ?? err),
+        });
+      });
   }
 
   // A double-click is the fastest path through the palette and is kept
@@ -319,41 +316,40 @@ export default function Palette() {
   // a stale part, skill, prompt, scope, or set from the modal draft.
   function launchBinding(name) {
     if (launching || !name) return;
-    setLaunchError("");
-    setLaunching(true);
+    setDirectLaunchError("");
+    setDirectLaunching(true);
     Launch.Binding(name)
       .then(() => {
-        resetComposeDraft();
         return Shell.HidePalette();
       })
-      .catch((err) => setLaunchError(String(err?.message ?? err)))
-      .finally(() => setLaunching(false));
+      .catch((err) => setDirectLaunchError(String(err?.message ?? err)))
+      .finally(() => setDirectLaunching(false));
   }
 
   function openBindingComposition(index, name) {
-    resetComposeDraft();
     setActiveIndex(index);
-    setComposeBinding(name);
-    setComposeOpen(true);
-    setLaunchError("");
+    setDirectLaunchError("");
+    dispatchComposition({ type: "OPEN_BINDING", target: name });
     requestAnimationFrame(() => partDraftRef.current?.focus());
   }
 
-  // This is a NEW draft, per T33: opening it clears any additions that were
-  // being composed over a selected binding. resetComposeDraft still owns
-  // today's dismissal behavior; T30 owns whether that function is called on
-  // blur in the future, so this task does not choose draft persistence.
+  // This is a NEW draft, per T33. The state machine refuses to replace an
+  // already-open draft; switching modes therefore requires Discard & close.
   function openBindinglessComposition() {
-    resetComposeDraft();
-    setBindingless(true);
-    setComposeOpen(true);
-    setLaunchError("");
+    setDirectLaunchError("");
+    dispatchComposition({ type: "OPEN_PROFILE" });
     requestAnimationFrame(() => baseProfileRef.current?.focus());
   }
 
-  function closeComposition() {
-    resetComposeDraft();
+  function discardComposition() {
+    activeCompositionLaunchRef.current = null;
+    dispatchComposition({ type: "DISCARD" });
     requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  function clearComposition() {
+    dispatchComposition({ type: "CLEAR" });
+    requestAnimationFrame(() => (bindingless && !composeTarget ? baseProfileRef : partDraftRef).current?.focus());
   }
 
   // addSkills splits raw on commas (--skill's own "comma-separated and
@@ -368,10 +364,10 @@ export default function Palette() {
       .map((s) => s.trim())
       .filter((s) => s !== "" && !skills.includes(s));
     if (additions.length === 0) return;
-    setSkills((cur) => [...cur, ...additions]);
+    dispatchComposition({ type: "ADD_SKILLS", values: additions });
   }
   function removeSkill(name) {
-    setSkills((cur) => cur.filter((s) => s !== name));
+    dispatchComposition({ type: "REMOVE_SKILL", value: name });
   }
 
   // addPrompts is addSkills' exact mirror for --prompt (CW-20260904-0006):
@@ -383,38 +379,32 @@ export default function Palette() {
       .map((s) => s.trim())
       .filter((s) => s !== "" && !prompts.includes(s));
     if (additions.length === 0) return;
-    setPrompts((cur) => [...cur, ...additions]);
+    dispatchComposition({ type: "ADD_PROMPTS", values: additions });
   }
   function removePrompt(name) {
-    setPrompts((cur) => cur.filter((p) => p !== name));
+    dispatchComposition({ type: "REMOVE_PROMPT", value: name });
   }
 
   function addPart(raw) {
     const value = raw.trim();
     if (value === "" || parts.includes(value)) return;
-    setParts((cur) => [...cur, value]);
+    dispatchComposition({ type: "ADD_PART", value });
   }
   function removePart(value) {
-    setParts((cur) => cur.filter((p) => p !== value));
+    dispatchComposition({ type: "REMOVE_PART", value });
   }
   function movePart(index, offset) {
-    setParts((cur) => {
-      const nextIndex = index + offset;
-      if (nextIndex < 0 || nextIndex >= cur.length) return cur;
-      const next = [...cur];
-      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-      return next;
-    });
+    dispatchComposition({ type: "MOVE_PART", index, offset });
   }
 
   function addSet(slot, value) {
     const s = slot.trim();
     const v = value.trim();
     if (s === "" || v === "") return;
-    setSets((cur) => [...cur, { slot: s, value: v }]);
+    dispatchComposition({ type: "ADD_SET", value: { slot: s, value: v } });
   }
   function removeSet(index) {
-    setSets((cur) => cur.filter((_, i) => i !== index));
+    dispatchComposition({ type: "REMOVE_SET", index });
   }
 
   function onSearchKeyDown(e) {
@@ -428,7 +418,7 @@ export default function Palette() {
       setActiveIndex((i) => (i - 1 + filtered.length) % filtered.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      attemptLaunch();
+      launchBinding(activeTarget?.name);
     }
   }
 
@@ -455,7 +445,7 @@ export default function Palette() {
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
-          setLaunchError("");
+          setDirectLaunchError("");
         }}
         onKeyDown={onSearchKeyDown}
       />
@@ -467,9 +457,9 @@ export default function Palette() {
         </button>
       </div>
 
-      {launchError && !composeOpen ? (
+      {directLaunchError && !composeOpen ? (
         <div className="err" style={{ padding: "8px 14px" }}>
-          Couldn't launch: {launchError}
+          Couldn't launch: {directLaunchError}
         </div>
       ) : null}
 
@@ -480,7 +470,7 @@ export default function Palette() {
           activeIndex,
           (index) => {
             setActiveIndex(index);
-            setLaunchError("");
+            setDirectLaunchError("");
           },
           setActiveIndex,
           openBindingComposition,
@@ -492,7 +482,8 @@ export default function Palette() {
       {composeOpen && (bindingless || composeBinding) ? (
         <ComposeSection
           bindingless={bindingless}
-          targetName={bindingless ? baseProfile.trim() : composeBinding}
+          targetName={composeTarget}
+          retained={composeRetained}
           baseProfile={baseProfile}
           setBaseProfile={setBaseProfile}
           baseProfileRef={baseProfileRef}
@@ -532,7 +523,8 @@ export default function Palette() {
           onDraftEnter={onDraftEnter}
           acceptTopSuggestion={acceptTopSuggestion}
           attemptLaunch={attemptLaunch}
-          closeComposition={closeComposition}
+          clearComposition={clearComposition}
+          discardComposition={discardComposition}
         />
       ) : null}
 
@@ -568,6 +560,7 @@ function ComposeSection(props) {
   const {
     bindingless,
     targetName,
+    retained,
     baseProfile,
     setBaseProfile,
     baseProfileRef,
@@ -607,7 +600,8 @@ function ComposeSection(props) {
     onDraftEnter,
     acceptTopSuggestion,
     attemptLaunch,
-    closeComposition,
+    clearComposition,
+    discardComposition,
   } = props;
 
   const modalRef = useRef(null);
@@ -633,12 +627,7 @@ function ComposeSection(props) {
   };
 
   return (
-    <div
-      className="compose-modal-backdrop"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) closeComposition();
-      }}
-    >
+    <div className="compose-modal-backdrop">
       <section
         ref={modalRef}
         className="compose-modal"
@@ -655,9 +644,14 @@ function ComposeSection(props) {
             <div className="compose-modal-target">
               {bindingless ? targetName || "Choose a base profile" : targetName}
             </div>
+            {retained ? (
+              <div className="compose-draft-retained" role="status">
+                Draft retained while the palette was hidden
+              </div>
+            ) : null}
           </div>
-          <button type="button" className="compose-modal-close" onClick={closeComposition} aria-label="Close composition">
-            ×
+          <button type="button" className="compose-modal-discard" onClick={discardComposition}>
+            Discard &amp; close
           </button>
         </header>
 
@@ -666,10 +660,10 @@ function ComposeSection(props) {
 
           <div className="compose-section">
 
-      {bindingless ? (
+      {bindingless && !targetName ? (
         <div className="compose-field compose-base-profile">
           <label htmlFor="compose-profile-input">
-            Base profile <span className="muted">(suggestions only — free text works)</span>
+            Base profile to capture <span className="muted">(suggestions only — free text works)</span>
           </label>
           <input
             id="compose-profile-input"
@@ -948,9 +942,14 @@ function ComposeSection(props) {
 
         <footer className="compose-modal-footer">
           <span className="muted">Launch only — this palette never writes a binding.</span>
-          <button type="button" onClick={attemptLaunch} disabled={launching || !targetName}>
-            {launching ? "Launching…" : "Launch composition"}
-          </button>
+          <div className="compose-modal-actions">
+            <button type="button" className="secondary" onClick={clearComposition} disabled={launching}>
+              Clear
+            </button>
+            <button type="button" onClick={attemptLaunch} disabled={launching || (!targetName && !baseProfile.trim())}>
+              {launching ? "Launching…" : bindingless && !targetName ? "Use base profile" : "Launch composition"}
+            </button>
+          </div>
         </footer>
       </section>
     </div>
