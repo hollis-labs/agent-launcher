@@ -15,7 +15,9 @@ import (
 // must derive exactly the directory segment the real Cairn binary plants a
 // saved binding into, because a saved binding's boot-target string and its
 // Key() seed are, by construction, meant to be the same string (see
-// key.go's doc comment, and target-architecture.md §5). If they ever
+// key.go's doc comment, and Tesseract's tachyon_vnext_target_architecture
+// D6 -- the design document that first stated it is archived history and
+// is deliberately not cited here). If they ever
 // disagreed, boot.CurrentPath would name a directory Cairn never plants
 // into: Prepare would move aside a path nothing writes, while the real
 // boot directory silently accumulated a fresh ~/.claude.json trust entry

@@ -76,11 +76,26 @@ Stated so nobody designs around a promise that is not there.
 
 ## Status
 
-Being rebuilt, and currently the cleared ground for that rebuild. The Swift
-menubar app, the Go sidecar behind it, its bundled catalog corpus, the
-frozen `list`/`describe`/`launch` contract and the `go-agent-launch` dependency
-have all been deleted. Nothing here launches anything yet.
+The manager and the launch path both work. Tachyon reads the agent-setup
+bundle, shows it as a tree, and edits it as text byte-for-byte. Summoning the
+palette and picking a saved binding launches it through Cairn into an iTerm2
+session, in a stable boot directory that is moved aside rather than deleted on
+relaunch.
 
-- Plan: `CW-20260518-0061`.
-- Target architecture (decisions D1–D10):
-  `~/dev/agent-os/workspaces/drafts/tachyon/session-20260902-0ce7995c/target-architecture.md`
+The Swift menubar app, the Go sidecar behind it, its bundled catalog corpus,
+the frozen `list`/`describe`/`launch` contract and the `go-agent-launch`
+dependency are all gone.
+
+Not built yet: the compose form and saving a composition as a binding (both
+waiting on Cairn's `--with`/`--set`/`--skill`), and the guarded sweep of the
+`.prev-*` directories relaunch leaves behind.
+
+### Where the authority is
+
+**Tesseract, then code, then Chrispian.** A document in this repo describes the
+moment it was written and is not binding.
+
+- Decisions: `tachyon_vnext_target_architecture` in Tesseract
+  (`user/chrispian/memory/decisions`). Fetch it by key rather than searching
+  for it.
+- Work and its state: `CW-20260518-0061` in Torque.
