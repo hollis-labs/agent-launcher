@@ -1,10 +1,12 @@
 package shell
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,9 +16,11 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/icons"
 
 	"github.com/hollis-labs/tachyon/internal/binding"
+	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/launch"
 	"github.com/hollis-labs/tachyon/internal/manager"
+	"github.com/hollis-labs/tachyon/internal/state"
 )
 
 // Config is everything the shell needs from its host.
@@ -137,6 +141,7 @@ func New(cfg Config) (*Shell, error) {
 	s.wireWindows()
 	s.wireTray()
 	s.wireHotkey()
+	s.wireBootSweep()
 
 	return s, nil
 }
@@ -345,6 +350,99 @@ func (s *Shell) wireHotkey() {
 		s.log.Info("global hotkey registered", "accelerator", accelerator,
 			"note", "registration success does not prove the hotkey fires")
 	}()
+}
+
+// bootSweepTimeout bounds one whole [Shell.SweepBootDirectories] call —
+// generous relative to boot's own per-lsof-invocation timeout, since a
+// real boot root can hold several bindings' worth of .prev-* candidates,
+// each probed once. It exists so a wedged lsof (a hung filesystem, an NFS
+// mount, whatever) cannot leave the startup sweep's goroutine running
+// forever; it does not exist to make the sweep run on any kind of
+// schedule — see this method's own doc for why there is exactly one
+// startup call and one manual one, and nothing periodic.
+const bootSweepTimeout = 60 * time.Second
+
+// wireBootSweep runs [Shell.SweepBootDirectories] exactly once, after the
+// application has finished starting — same "wait for s.started, then run
+// in a goroutine" shape as [Shell.wireHotkey], for the same reason: this
+// must not block Run() or the window creation sequence, and nothing here
+// needs the main thread. This is the ONLY place this package schedules a
+// sweep. There is no ticker, no timer, no periodic re-run — the sweep
+// specified in CW-20260903-0019 is deliberately "once at app start, plus
+// whenever a person clicks the manual action in the manager
+// (Service.SweepBootDirectories)" and nothing else; see that task's own
+// hazard notes for why an automatic re-sweep is not a safe default even
+// though it would be easy to add here.
+func (s *Shell) wireBootSweep() {
+	go func() {
+		<-s.started
+
+		ctx, cancel := context.WithTimeout(context.Background(), bootSweepTimeout)
+		defer cancel()
+
+		report, err := s.SweepBootDirectories(ctx)
+		if err != nil {
+			s.log.Error("boot directory sweep failed", "err", err)
+			return
+		}
+		s.logSweepReport(report)
+	}()
+}
+
+// SweepBootDirectories runs [boot.Sweep] against Tachyon's real boot root
+// ([state.BootRoot]) and the real lsof binary, and returns what it found.
+// This is the one place that resolves those two real values and builds
+// the real [boot.LsofRunner] — both [wireBootSweep] (the automatic sweep
+// at app start) and [Service.SweepBootDirectories] (the manual action the
+// manager's Settings pane offers) call this method, so there is exactly
+// one implementation of "what Sweep actually runs against in this app,"
+// not two that could quietly drift apart.
+//
+// Resolving lsof follows the same pattern internal/launch.Service.Launch
+// and cmd/tachyon/main.go already use for cairn: exec.LookPath first,
+// against the app's real PATH. Unlike those two call sites, a failed
+// lookup here is not itself a fatal error — an empty lsofPath still
+// produces a working [boot.LsofRunner] (it runs the bare command name
+// "lsof", deferring the failure to exec time), and [boot.Sweep] already
+// turns "lsof could not be run at all" into a reported, visible
+// Report.GuardOK == false rather than a crash. See [boot.Sweep]'s own doc
+// for the full argument against ever treating an lsof failure as
+// something to guess past.
+func (s *Shell) SweepBootDirectories(ctx context.Context) (boot.Report, error) {
+	root, err := state.BootRoot()
+	if err != nil {
+		return boot.Report{}, fmt.Errorf("shell: resolving boot root: %w", err)
+	}
+
+	lsofPath, err := exec.LookPath("lsof")
+	if err != nil {
+		s.log.Warn("lsof not found via LookPath; boot sweep will report the guard as unavailable", "err", err)
+		lsofPath = ""
+	}
+
+	return boot.Sweep(ctx, root, boot.ExecLsofRunner(lsofPath))
+}
+
+// logSweepReport writes one [boot.Report] to s.log at a level matched to
+// what it says: an unavailable guard is a warning a person should notice
+// (nothing was swept, and not because there was nothing to sweep), a
+// removed directory is worth a line per directory, and a skipped
+// candidate with an ordinary "still held open" reason is routine detail,
+// not a warning.
+func (s *Shell) logSweepReport(report boot.Report) {
+	s.log.Info("boot directory sweep complete",
+		"guardOK", report.GuardOK, "swept", len(report.Swept), "skipped", len(report.Skipped))
+
+	if !report.GuardOK {
+		s.log.Warn("boot directory sweep: liveness guard unavailable this run — nothing was removed",
+			"detail", report.GuardDetail)
+	}
+	for _, p := range report.Swept {
+		s.log.Info("boot directory sweep: removed", "path", p)
+	}
+	for _, sk := range report.Skipped {
+		s.log.Debug("boot directory sweep: skipped", "path", sk.Path, "reason", sk.Reason)
+	}
 }
 
 // TogglePalette shows the palette if it is hidden, hides it if it is visible.
