@@ -162,25 +162,40 @@ open build/bin/Tachyon.app
 ```
 
 With the package quit, the local tray acceptance check launches that exact app
-through LaunchServices, resolves its Accessibility frame, captures those menu-
-bar pixels, and fails if the mark is in macOS's visually blank overflow region:
+through LaunchServices, verifies its separate Accessibility label, captures its
+menu-bar pixels, toggles the palette through AXPress, exercises the real right-
+click menu, exits through that exact menu's Quit action, and fails if the mark
+is in macOS's visually blank overflow region:
 
 ```sh
 ./scripts/check-macos-tray.sh
 ```
 
 The check needs Accessibility and Screen Recording access for the invoking
-terminal. Tachyon registers a first-run position default that places its single
-status item near the right side, avoiding the overflow measured on the target
-notched menu bar; a position the user later chooses by Command-dragging takes
-precedence.
+terminal. Use its cold-position mode to temporarily remove both the legacy and
+current saved positions, verify the first-run fallback, and restore the exact
+values (or absence) when the check exits:
+
+```sh
+./scripts/check-macos-tray.sh --cold-position
+```
+
+On macOS Tachyon owns one narrow AppKit status-item bridge because Wails v3
+does not expose its native status item or setters for the platform-only
+properties. The bridge gives the item a stable public `NSStatusItem.autosaveName`
+and gives its button the public Accessibility label “Tachyon,” independently of
+the visible `⌁` title. A one-time migration moves a persistent position from
+Wails' old automatic `Item-0` name. AppKit exposes no public initial-position
+setter, so a non-persistent registered fallback keeps a truly new item out of
+the overflow measured on the target notched menu bar. A migrated or
+Command-dragged named position has ordinary user-default precedence.
 
 If a previously saved custom position is itself hidden, quit Tachyon, remove
 only that placement, and relaunch; the first-run default will be registered
 again:
 
 ```sh
-defaults delete com.hollislabs.tachyon 'NSStatusItem Preferred Position Item-0'
+defaults delete com.hollislabs.tachyon 'NSStatusItem Preferred Position com.hollislabs.tachyon.main-status-item'
 open build/bin/Tachyon.app
 ```
 
@@ -192,8 +207,9 @@ above, and observe all of the following:
    uses a valid value saved in Settings or `shell.json`; a fresh preferences
    file, or a missing or invalid saved value, falls back to
    `Ctrl+Option+Space`.
-2. The Tachyon tray icon renders; left-click toggles the palette, and
-   right-click shows Open Manager, Settings and Quit.
+2. The Tachyon tray mark renders as `⌁`; VoiceOver announces it as “Tachyon”;
+   left-click toggles the palette; and right-click shows Open Manager, Settings
+   and Quit.
 3. After quitting, rerun `./scripts/build-macos.sh` and launch the same app path
    with `open`; Accessibility remains enabled without adding the app again, and
    the hotkey and tray still work.

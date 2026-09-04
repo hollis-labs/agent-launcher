@@ -26,8 +26,14 @@ import (
 )
 
 const (
-	trayLabel   = "⌁"
-	trayTooltip = "Tachyon"
+	trayLabel              = "⌁"
+	trayAccessibilityLabel = "Tachyon"
+	trayAutosaveName       = "com.hollislabs.tachyon.main-status-item"
+	// AppKit exposes autosaveName but no API for a first-run placement. This
+	// registered (non-persistent) fallback keeps a brand-new status item out of
+	// the target notched menu bar's overflow; a migrated or Command-dragged
+	// named position always wins over it.
+	trayDefaultPreferredPosition = 220
 )
 
 type trayPresentation interface {
@@ -37,7 +43,7 @@ type trayPresentation interface {
 
 func configureTrayPresentation(tray trayPresentation) {
 	tray.SetLabel(trayLabel)
-	tray.SetTooltip(trayTooltip)
+	tray.SetTooltip(trayAccessibilityLabel)
 }
 
 // Config is everything the shell needs from its host.
@@ -72,7 +78,6 @@ type Shell struct {
 	prefs   *Store
 	palette *application.WebviewWindow
 	manager *application.WebviewWindow
-	tray    *application.SystemTray
 	hotkey  *hotkeyBinder
 
 	// geometryDirty coalesces manager resize/move events. Capacity 1: a burst
@@ -236,14 +241,13 @@ func paletteOptions() application.WebviewWindowOptions {
 			// Deliberately NSPopUpMenuWindowLevel (101) rather than the
 			// floating level (3) that §4 names.
 			//
-			// systemTrayPositionWindow (systemtray_darwin.m:323) does an
-			// unconditional [nsWindow setLevel:NSPopUpMenuWindowLevel] every
-			// time the tray positions an attached window. Since §4 also
-			// requires the palette to be tray-attached, the level becomes 101
-			// on the first tray toggle no matter what is declared here — and
-			// stays there. Declaring 3 would therefore not produce 3; it would
-			// produce a window whose level changes under the user the first
-			// time they click the tray icon.
+			// Tachyon's macOS status-item bridge calls
+			// tachyonTrayPositionWindow (tray_darwin.m) before every tray-open
+			// and unconditionally sets NSPopUpMenuWindowLevel. The level
+			// therefore becomes 101 on the first tray toggle no matter what is
+			// declared here — and stays there. Declaring 3 would not produce 3;
+			// it would produce a window whose level changes under the user the
+			// first time they click the tray mark.
 			//
 			// Declaring 101 makes the level the same on every summon path.
 			// Nothing §4 wants is lost: 101 is above the floating level, and
@@ -320,30 +324,6 @@ func (s *Shell) wireWindows() {
 	// A resize that happens seconds before quit would otherwise be lost with
 	// the pending debounce.
 	s.app.OnShutdown(func() { s.saveManagerGeometry() })
-}
-
-func (s *Shell) wireTray() {
-	menu := application.NewMenu()
-	menu.Add("Open Manager").OnClick(func(*application.Context) { s.OpenManager() })
-	menu.Add("Settings…").OnClick(func(*application.Context) { s.OpenManagerSettings() })
-	menu.AddSeparator()
-	menu.Add("Quit Tachyon").OnClick(func(*application.Context) { s.app.Quit() })
-
-	registerTrayPlacementDefault()
-	s.tray = s.app.SystemTray.New()
-	// The label is Tachyon's visible, accessibility-testable menu-bar mark.
-	// Wails' template image produced a live, clickable status item in the
-	// packaged app, but the mark was invisible and the item had no AX name.
-	// Keep this label-only: it maps directly to NSStatusBarButton.title and
-	// avoids relying on Wails' unchecked NSImage decoding/template rendering.
-	configureTrayPresentation(s.tray)
-
-	// One tray icon serves both windows. applySmartDefaults installs
-	// ToggleWindow as the left-click handler because a window is attached, and
-	// ShowMenu as the right-click handler because a menu is set — so the
-	// palette is a left-click away and the manager is in the right-click menu.
-	s.tray.AttachWindow(s.palette).WindowOffset(6)
-	s.tray.SetMenu(menu)
 }
 
 func (s *Shell) wireHotkey() {

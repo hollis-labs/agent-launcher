@@ -1,7 +1,6 @@
-// tachyon-menubarcheck verifies that a captured status-item frame contains a
-// rendered mark rather than only menu-bar background. It is invoked by
-// scripts/check-macos-tray.sh after that script resolves the package's exact
-// Accessibility frame and captures it with screencapture.
+// tachyon-menubarcheck provides the native operations needed by the packaged
+// tray acceptance check: pixel inspection, a physical right-click, and
+// PID/executable-checked Cocoa termination for failure cleanup.
 package main
 
 import (
@@ -10,6 +9,7 @@ import (
 	_ "image/png"
 	"os"
 	"sort"
+	"strconv"
 )
 
 const (
@@ -18,8 +18,35 @@ const (
 )
 
 func main() {
+	if len(os.Args) == 4 && os.Args[1] == "--terminate" {
+		pid, err := strconv.Atoi(os.Args[2])
+		if err != nil || pid <= 0 || os.Args[3] == "" {
+			fmt.Fprintln(os.Stderr, "terminate requires a positive PID and exact executable path")
+			os.Exit(2)
+		}
+		if err := terminateApplication(pid, os.Args[3]); err != nil {
+			fmt.Fprintf(os.Stderr, "terminate exact packaged app: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 6 && os.Args[1] == "--right-click" {
+		x, xerr := strconv.ParseFloat(os.Args[2], 64)
+		y, yerr := strconv.ParseFloat(os.Args[3], 64)
+		width, werr := strconv.ParseFloat(os.Args[4], 64)
+		height, herr := strconv.ParseFloat(os.Args[5], 64)
+		if xerr != nil || yerr != nil || werr != nil || herr != nil || width <= 0 || height <= 0 {
+			fmt.Fprintln(os.Stderr, "right-click requires numeric X Y WIDTH HEIGHT with positive dimensions")
+			os.Exit(2)
+		}
+		if err := postRightClick(x+width/2, y+height/2); err != nil {
+			fmt.Fprintf(os.Stderr, "right-click status item: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: tachyon-menubarcheck STATUS-ITEM.png")
+		fmt.Fprintln(os.Stderr, "usage: tachyon-menubarcheck STATUS-ITEM.png | --right-click X Y WIDTH HEIGHT | --terminate PID EXECUTABLE")
 		os.Exit(2)
 	}
 
