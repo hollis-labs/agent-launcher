@@ -22,6 +22,7 @@ import (
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/launch"
 	"github.com/hollis-labs/tachyon/internal/manager"
+	"github.com/hollis-labs/tachyon/internal/preview"
 	"github.com/hollis-labs/tachyon/internal/project"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
@@ -111,6 +112,7 @@ func New(cfg Config) (*Shell, error) {
 	// showed, from the same bundle everything else above is reading.
 	launcher := launch.NewService(rootStore)
 	composer := bindingcomposer.NewService(rootStore, launcher)
+	compositionPreview := preview.NewService(rootStore, preview.Options{})
 	// Same rootStore a fourth time: Apply (CW-20260904-0023) stages
 	// whichever bundle everything else above is reading. apply.Options{}
 	// (the zero value) is real behavior — the real AGENTS_HOME
@@ -157,6 +159,7 @@ func New(cfg Config) (*Shell, error) {
 			application.NewService(bindings),
 			application.NewService(launcher),
 			application.NewService(composer),
+			application.NewService(compositionPreview),
 			application.NewService(stager),
 			application.NewService(projects),
 		},
