@@ -162,10 +162,22 @@ func bundleRootStore(override string) (bundle.RootStore, error) {
 // see the package documentation and target architecture §4.
 func paletteOptions() application.WebviewWindowOptions {
 	return application.WebviewWindowOptions{
-		Name:            "palette",
-		Title:           "Tachyon",
-		Width:           680,
-		Height:          420,
+		Name:  "palette",
+		Title: "Tachyon",
+		Width: 680,
+		// 420 was tall enough for the binding list alone. CW-20260903-0017
+		// added the compose form (skills/scope/parts/sets) below it, sharing
+		// scroll space with the list rather than growing without bound — see
+		// styles.css's .palette-scroll — but the form's four field groups
+		// still need real room even with the list capped at a modest
+		// max-height (.palette-list). 640 was measured against that layout
+		// with an active row selected (search input + a few list rows + all
+		// four compose field groups) without the scroll region kicking in for
+		// a typical case; DisableResize below means this is the only place
+		// that number is chosen, so a much taller compose form (more parts or
+		// skills than fit) still degrades gracefully into .palette-scroll's
+		// own scrolling rather than growing the window.
+		Height:          640,
 		Frameless:       true,
 		DisableResize:   true,
 		AlwaysOnTop:     true,

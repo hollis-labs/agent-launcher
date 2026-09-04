@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/bundle"
+	"github.com/hollis-labs/tachyon/internal/compose"
+	"github.com/hollis-labs/tachyon/internal/testbundle"
 )
 
 // This is a white-box test (package launch, not launch_test) because it
@@ -421,4 +425,383 @@ func TestResolveCwd(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- compositionFromInput (CW-20260903-0017 / T13) ----------------------
+//
+// These exercise the pure CompositionInput -> compose.Composition mapping
+// LaunchComposition hands to runComposition, without a real bundle store,
+// a real boot root or cairn on PATH -- see compositionFromInput's own doc
+// for why it is kept separate for exactly this purpose.
+
+// TestCompositionFromInput_MapsEveryFieldToTheMatchingCairnFlag builds one
+// CompositionInput exercising every field at once and checks the argv
+// compose.Build produces from it names every value in the fixed order the
+// target contract specifies (internal/compose's own package doc) -- the
+// same "every control at once" shape compose_test.go's own TestBuild
+// covers for compose.Composition directly, run here one layer up, from
+// exactly the shape the frontend sends across the Wails boundary.
+func TestCompositionFromInput_MapsEveryFieldToTheMatchingCairnFlag(t *testing.T) {
+	input := CompositionInput{
+		Target: "eng-nanite",
+		Skills: []string{"skill-one", "skill-two"},
+		Scope:  "/scope/path",
+		Sets: []SetInput{
+			{Slot: "slot-one", Value: "value-one"},
+		},
+		Parts: []string{"extra-part"},
+	}
+
+	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root")
+
+	argv, err := compose.Build(comp)
+	if err != nil {
+		t.Fatalf("compose.Build: unexpected error: %v", err)
+	}
+
+	want := []string{
+		"boot", "eng-nanite",
+		"--profile", "/bundle/root",
+		"--boot-root", "/state/boot/root",
+		"--session", "current",
+		"--with", "extra-part",
+		"--skill", "skill-one,skill-two",
+		"--set", "slot-one=value-one",
+		"--scope", "/scope/path",
+		"--json",
+	}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("argv =\n  %#v\nwant\n  %#v", argv, want)
+	}
+}
+
+// TestCompositionFromInput_EmptyInputProducesTheSameMinimalArgvAsBareLaunch
+// is the additive-only guarantee's other half, stated as an argv-shape
+// fact rather than a UI rule: a CompositionInput with every optional field
+// left at its zero value -- exactly what Palette.jsx's initial compose-form
+// state is (see Palette.jsx's own comment on this) -- must produce an argv
+// with no --skill, --scope, --set or --with at all, identical in shape to
+// what [launch] (the bare Launch(name) path) has always produced. If this
+// ever failed, it would mean compositionFromInput started synthesizing
+// something Skills/Scope/Sets/Parts being empty should never produce --
+// exactly the class of bug the fail-alone acceptance criterion exists to
+// catch, caught here at the pure-mapping layer rather than only by
+// eyeballing the frontend.
+func TestCompositionFromInput_EmptyInputProducesTheSameMinimalArgvAsBareLaunch(t *testing.T) {
+	input := CompositionInput{Target: "eng-nanite"}
+	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root")
+
+	argv, err := compose.Build(comp)
+	if err != nil {
+		t.Fatalf("compose.Build: unexpected error: %v", err)
+	}
+
+	want := []string{
+		"boot", "eng-nanite",
+		"--profile", "/bundle/root",
+		"--boot-root", "/state/boot/root",
+		"--session", "current",
+		"--json",
+	}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("argv =\n  %#v\nwant\n  %#v\n(an empty CompositionInput must add nothing beyond the bare target)", argv, want)
+	}
+	for _, a := range argv {
+		if a == "--skill" {
+			t.Fatalf("argv %v contains --skill despite CompositionInput.Skills being empty -- exactly the fail-alone hazard", argv)
+		}
+	}
+}
+
+// TestCompositionFromInput_SkillsPassThroughUnmodified proves
+// compositionFromInput applies no union, dedup, sort or lookup to Skills:
+// what the palette typed is exactly, and only, what reaches
+// compose.Composition.Skills -- element for element, in the same order,
+// with the same length. A second implementation that quietly merged in
+// anything else (a profile's own resolved skills, for instance) would
+// change this slice's contents without touching CompositionInput.Skills
+// itself, which is exactly what this equality check would catch.
+func TestCompositionFromInput_SkillsPassThroughUnmodified(t *testing.T) {
+	cases := [][]string{
+		nil,
+		{},
+		{"solo"},
+		{"zeta", "alpha", "middle"}, // deliberately unsorted -- compositionFromInput must not sort
+	}
+	for _, skills := range cases {
+		input := CompositionInput{Target: "x", Skills: skills}
+		comp := compositionFromInput(input, "/bundle", "/boot")
+		if len(comp.Skills) != len(skills) {
+			t.Fatalf("Skills %v became %v (different length)", skills, comp.Skills)
+		}
+		for i := range skills {
+			if comp.Skills[i] != skills[i] {
+				t.Fatalf("Skills %v became %v (differs at index %d)", skills, comp.Skills, i)
+			}
+		}
+	}
+}
+
+// --- LaunchComposition orchestration (fakes only) ------------------------
+
+// TestRunComposition_FullCompositionReachesTheFakeRunnerVerbatim drives
+// [runComposition] itself -- the shared core LaunchComposition funnels
+// into, same as [launch] does -- with a composition built the same way
+// [Service.LaunchComposition] builds one, confirming the fake runner
+// receives the exact composed argv and the fake spawn receives the harness
+// argv and cwd cairn's --json report named, end to end through the shared
+// core, without a real cairn binary.
+func TestRunComposition_FullCompositionReachesTheFakeRunnerVerbatim(t *testing.T) {
+	fr := &fakeRunner{stdout: []byte(bootDirFixture)}
+	rec := &spawnRecorder{}
+
+	input := CompositionInput{
+		Target: "eng-nanite",
+		Skills: []string{"qstatus"},
+		Sets:   []SetInput{{Slot: "role", Value: "marker"}},
+		Parts:  []string{"writer"},
+	}
+	comp := compositionFromInput(input, "/bundle/root", t.TempDir())
+
+	if err := runComposition(context.Background(), comp, comp.BootRoot, fr.run, rec.spawn); err != nil {
+		t.Fatalf("runComposition: %v", err)
+	}
+	if !rec.called {
+		t.Fatal("spawn was not called")
+	}
+
+	wantArgv := []string{
+		"boot", "eng-nanite",
+		"--profile", "/bundle/root",
+		"--boot-root", comp.BootRoot,
+		"--session", "current",
+		"--with", "writer",
+		"--skill", "qstatus",
+		"--set", "role=marker",
+		"--json",
+	}
+	if !reflect.DeepEqual(fr.gotArgv, wantArgv) {
+		t.Fatalf("cairn argv =\n  %#v\nwant\n  %#v", fr.gotArgv, wantArgv)
+	}
+}
+
+// --- The fail-alone structural guard: Binding carries no skills field ---
+
+// TestBindingCarriesNoSkillsFieldToSeedFrom is a permanent regression guard
+// for the single acceptance criterion this whole task can be failed on
+// alone: the palette's compose form must never pre-populate its skills
+// control from a binding's or profile's already-resolved skills. This
+// package cannot inspect Palette.jsx's own React state, but it CAN prove
+// something stronger and machine-checkable -- that [binding.Binding], the
+// only shape internal/binding.Service.List() ever hands the frontend
+// (see that package's own doc), carries no field, under any name or JSON
+// tag, that could even be read as "this binding's skills." If a future
+// change ever added one -- to surface a profile's resolved skills for some
+// other reason -- this test fails immediately, forcing a conscious
+// decision about the palette's compose-form seed rather than a silent one.
+//
+// This does not replace reading Palette.jsx by hand to confirm its own
+// initial state (useState([]), never populated from anything else); it
+// proves the stronger, structural half: even a Palette.jsx that WANTED to
+// seed from something has nothing to seed from.
+func TestBindingCarriesNoSkillsFieldToSeedFrom(t *testing.T) {
+	typ := reflect.TypeOf(binding.Binding{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if strings.Contains(strings.ToLower(f.Name), "skill") {
+			t.Fatalf("binding.Binding.%s: field name contains %q -- a compose form could seed its skills control from this", f.Name, "skill")
+		}
+		tag := f.Tag.Get("json")
+		if strings.Contains(strings.ToLower(tag), "skill") {
+			t.Fatalf("binding.Binding.%s: json tag %q contains %q -- a compose form could seed its skills control from this", f.Name, tag, "skill")
+		}
+	}
+}
+
+// --- Real end-to-end: a full composition through the real cairn binary --
+//
+// This test writes nothing outside a t.TempDir() -- see the "never
+// ~/dev/agent-os" hazard internal/compose's own package doc guards
+// against (D9).
+
+// TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory
+// is this task's own required proof, run as a real integration test rather
+// than asserted only from --help text: a full composition -- a target
+// binding, an ADDED skill, an ADDED --with part, and a --set override --
+// through the real cairn binary against the real, read-only
+// ~/dev/projects/agent-setup bundle, into a scratch boot root this test
+// owns and t.TempDir() cleans up. It then reads the actual rendered files
+// cairn wrote and confirms all three landed:
+//
+//   - the added skill's own content file exists under the composed boot
+//     directory's .claude/skills/, with the same content the installed
+//     skill source carries (proving cairn rendered it, not merely that a
+//     directory of that name exists);
+//   - the added --with part's own skill (writer's "blg", which eng-nanite's
+//     own profile -- engineer -- does not declare on its own) exists too,
+//     proving the part reached rendering and was not silently folded away;
+//   - the --set override's value is present in the rendered AGENTS.md,
+//     proving --set's substitution reached the document Cairn wrote, not
+//     merely that cairn exited 0.
+//
+// This is the filesystem-inspection half of "Hotkey -> compose -> Enter ->
+// an iTerm2 session opens with the composed selection" the task record
+// asks for: iTerm2 actually opening was already proven by T12
+// (CW-20260903-0016); what this proves is that the COMPOSITION -- the part
+// of this whole chain T13 actually adds -- reaches the boot directory
+// correctly. runComposition is driven directly, with a fake spawn (so this
+// test never opens a real terminal) and the real [boot.ExecRunner], the
+// same "fake the two edges, keep the real middle" shape
+// internal/boot/reconcile_test.go and cmd/tachyon/integration_test.go both
+// use.
+//
+// It skips, with a message saying why, only when a prerequisite is
+// genuinely absent from the machine running it: cairn not on PATH, the
+// ~/dev/projects/agent-setup bundle itself not present, or the "writer" /
+// "qstatus" fixtures this test's assertions are keyed to not existing in
+// it today (bundle content can move; a stale test target is a reason to
+// update this test, not a false failure). A bundle that IS present but
+// unreadable by this build of Tachyon is a different condition and FAILS
+// instead -- see [testbundle.Resolve]'s own doc, the same distinction
+// internal/boot/reconcile_test.go relies on.
+//
+// Nothing here writes into agent-setup -- --profile only reads it,
+// confirmed by this test's own before/after `git status --short` check on
+// that repo, exactly as this task's own standing rules require.
+func TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory(t *testing.T) {
+	cairnPath, err := exec.LookPath("cairn")
+	if err != nil {
+		t.Skipf("cairn not on PATH, skipping the real-composition end-to-end check: %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory on this machine: %v", err)
+	}
+	bundleRoot := filepath.Join(home, "dev", "projects", "agent-setup")
+
+	bindings, skip, err := testbundle.Resolve(bundleRoot)
+	if skip {
+		t.Skipf("no bundle at %s (agent-setup not present on this machine), skipping the real-composition end-to-end check", bundleRoot)
+	}
+	if err != nil {
+		t.Fatalf("bundle at %s is present but its bindings cannot be read -- this is exactly the break CW-20260904-0003 (T24) exists to catch loudly, not silence: %v", bundleRoot, err)
+	}
+
+	const target = "eng-nanite"
+	found := false
+	for _, b := range bindings {
+		if b.Name == target {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("bundle at %s is readable but has no binding named %q -- update this test's target, or the bundle", bundleRoot, target)
+	}
+
+	// git status --short before: confirm this run starts from a clean
+	// checkout of the read-only bundle, so a dirty result afterward can
+	// only be blamed on what this test itself just did.
+	beforeStatus := gitStatusShort(t, bundleRoot)
+
+	const addedSkill = "qstatus" // not in engineer.md's own `skills:` (search-first, surface-discovery)
+	const addedPart = "writer"   // contributes its own skill, "blg", which engineer.md does not declare
+	const partOnlySkill = "blg"  // writer.md's own skills: [blg]
+	const setSlot = "role"       // a slot engineer.md's own spec.slots declares
+	const setMarker = "TACHYON_T13_INTEGRATION_MARKER_9f3a1c"
+
+	scratchRoot := t.TempDir()
+
+	input := CompositionInput{
+		Target: target,
+		Skills: []string{addedSkill},
+		Parts:  []string{addedPart},
+		Sets:   []SetInput{{Slot: setSlot, Value: setMarker}},
+	}
+	comp := compositionFromInput(input, bundleRoot, scratchRoot)
+
+	rec := &spawnRecorder{}
+	runner := boot.ExecRunner(cairnPath)
+	if err := runComposition(context.Background(), comp, scratchRoot, runner, rec.spawn); err != nil {
+		t.Fatalf("runComposition against real cairn: %v", err)
+	}
+	if !rec.called {
+		t.Fatal("spawn was never called -- the real cairn invocation did not reach the end of runComposition")
+	}
+	bootDir := rec.cwd // cwd_preference for eng-nanite is "boot_dir" as of 2026-09-03; see resolveCwd
+	if info, statErr := os.Stat(bootDir); statErr != nil || !info.IsDir() {
+		t.Fatalf("reported boot dir %q does not exist or is not a directory: statErr=%v", bootDir, statErr)
+	}
+
+	// 1) The ADDED skill's content landed under the rendered boot
+	// directory, byte-identical to the installed skill source -- proving
+	// cairn actually rendered it, not merely that --skill was accepted.
+	renderedSkillPath := filepath.Join(bootDir, ".claude", "skills", addedSkill, "SKILL.md")
+	renderedSkill, err := os.ReadFile(renderedSkillPath)
+	if err != nil {
+		t.Fatalf("expected the added skill %q to render at %s: %v", addedSkill, renderedSkillPath, err)
+	}
+	installedSkillPath := filepath.Join(home, ".config", "agents", "skills", addedSkill, "SKILL.md")
+	if installedSkill, err := os.ReadFile(installedSkillPath); err == nil {
+		if string(renderedSkill) != string(installedSkill) {
+			t.Errorf("rendered skill %s content does not match the installed source at %s", renderedSkillPath, installedSkillPath)
+		}
+	} else {
+		t.Logf("installed skill source at %s not readable (%v); skipping the byte-identical comparison, keeping the existence+non-empty check below", installedSkillPath, err)
+	}
+	if len(renderedSkill) == 0 {
+		t.Errorf("rendered skill file %s is empty", renderedSkillPath)
+	}
+
+	// 2) The ADDED --with part's own contribution (a skill engineer.md does
+	// not itself declare) also landed -- proving the part reached
+	// rendering, not just the target's own cascade.
+	partSkillPath := filepath.Join(bootDir, ".claude", "skills", partOnlySkill, "SKILL.md")
+	if _, err := os.Stat(partSkillPath); err != nil {
+		t.Errorf("expected --with %s's own skill %q to render at %s (proving the part reached rendering): %v", addedPart, partOnlySkill, partSkillPath, err)
+	}
+
+	// 3) The --set override's value is present in the rendered AGENTS.md --
+	// proving the substitution reached the document cairn wrote.
+	agentsPath := filepath.Join(bootDir, "AGENTS.md")
+	agentsContent, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("reading rendered %s: %v", agentsPath, err)
+	}
+	if !strings.Contains(string(agentsContent), setMarker) {
+		t.Errorf("rendered %s does not contain the --set %s=%s marker %q -- substitution did not reach the document", agentsPath, setSlot, setMarker, setMarker)
+	}
+
+	// The target's OWN default skills (search-first, surface-discovery)
+	// must still be present too -- confirming the composition ADDED
+	// addedSkill on top of the resolved profile rather than replacing it.
+	for _, own := range []string{"search-first", "surface-discovery"} {
+		p := filepath.Join(bootDir, ".claude", "skills", own, "SKILL.md")
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("expected engineer.md's own skill %q to still be present at %s (additive, not replacing): %v", own, p, err)
+		}
+	}
+
+	afterStatus := gitStatusShort(t, bundleRoot)
+	if beforeStatus != afterStatus {
+		t.Fatalf("git status --short on %s changed during this test:\nbefore: %q\nafter:  %q\n(this test must only ever read that bundle)", bundleRoot, beforeStatus, afterStatus)
+	}
+}
+
+// gitStatusShort runs `git -C dir status --short` and returns its trimmed
+// output, failing the test if git itself could not be run. Used only to
+// assert the read-only bundle is unchanged by this test, before and after.
+func gitStatusShort(t *testing.T, dir string) string {
+	t.Helper()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git not on PATH, cannot verify %s is unchanged: %v", dir, err)
+	}
+	cmd := exec.Command(gitPath, "-C", dir, "status", "--short")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git -C %s status --short: %v\n%s", dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }

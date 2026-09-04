@@ -103,13 +103,26 @@ export const Binding = {
   Delete: (name) => callService(BINDING_SERVICE, "Delete", name),
 };
 
-// Launch is internal/launch.Service: the palette's one entry point for
-// turning a picked binding into a running terminal (CW-20260903-0016).
+// Launch is internal/launch.Service: the palette's entry points for turning
+// a picked binding, or a full compose-form selection built on top of one,
+// into a running terminal.
+//
 // Binding(name) resolves the named binding, runs `cairn boot` for it, and
 // spawns iTerm2 on the result -- fire-and-forget, no session handle. The
 // returned promise rejects with whatever internal/launch.Service.Launch
 // returned as an error; there is no success payload beyond the promise
 // resolving.
+//
+// Composition(input) is CW-20260903-0017's compose form: the same
+// fire-and-forget contract, but input carries everything the palette's
+// compose controls can add on top of a target --
+// { target, skills, scope, sets, parts }, matching
+// internal/launch.CompositionInput field for field (skills: string[],
+// sets: {slot, value}[], parts: string[]). skills is additive ONLY -- see
+// Palette.jsx's own comment on why that array must always start empty and
+// grow only from direct user action, never from anything a binding or
+// profile already resolves to.
 export const Launch = {
   Binding: (name) => callService(LAUNCH_SERVICE, "Launch", name),
+  Composition: (input) => callService(LAUNCH_SERVICE, "LaunchComposition", input),
 };

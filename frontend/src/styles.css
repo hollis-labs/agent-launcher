@@ -50,6 +50,23 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   outline: none;
 }
 .palette-shell input:focus { border-color: var(--accent); }
+
+/* palette-scroll wraps the list AND the compose form (CW-20260903-0017) in
+   one scrolling region between the search input and the footer, so the two
+   share whatever vertical space the window gives them instead of each
+   claiming its own flex:1 slice (which would starve the compose form
+   whenever the list is tall). Stops scroll chaining at its own boundary —
+   see .palette-list's own older comment on why, still the same reasoning,
+   just moved up one level since this element is now the one that scrolls. */
+.palette-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+}
 .placeholder {
   flex: 1;
   display: flex;
@@ -61,19 +78,10 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
 }
 
 .palette-list {
-  flex: 1;
-  min-height: 0; /* a flex child's default min-height:auto ignores its own
-                    overflow, which would let the list grow the whole
-                    palette-shell instead of scrolling internally */
+  flex-shrink: 0;
+  max-height: 168px;
   overflow-y: auto;
-  /* Stops scroll chaining at this element's own boundary (top/bottom of the
-     list) instead of letting the gesture continue past it. Without this,
-     scrolling past either end hands the rest of the gesture to the
-     document, which the html/body rule above cannot then distinguish from a
-     window-drag — see that rule's comment. CW-20260904-0004 (issue 3). */
-  overscroll-behavior: contain;
   list-style: none;
-  margin-top: 10px;
 }
 .palette-row {
   display: flex;
@@ -121,6 +129,76 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   font-size: 11px;
 }
 .palette-footer button { font-size: 11px; padding: 4px 10px; }
+
+/* --- Compose form (CW-20260903-0017): one control per Cairn flag beyond
+   the target already chosen from the list above. --- */
+.compose-section {
+  flex-shrink: 0;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.compose-heading {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.compose-target { color: var(--accent); font-style: normal; }
+.compose-field { display: flex; flex-direction: column; gap: 5px; }
+.compose-field label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.compose-field input {
+  width: 100%;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: #1b1e24;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+}
+.compose-field input:focus { border-color: var(--accent); }
+.compose-row { display: flex; align-items: center; gap: 6px; }
+.compose-row-eq { color: var(--muted); flex-shrink: 0; }
+.compose-empty {
+  font-size: 11px;
+  font-style: italic;
+}
+.compose-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.compose-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  padding: 3px 4px 3px 8px;
+  background: #1b1e24;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--fg);
+}
+.compose-chip button {
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 5px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.compose-chip button:hover { color: #e06c75; }
 
 .manager-shell { height: 100%; display: flex; flex-direction: column; }
 .manager-shell header {
