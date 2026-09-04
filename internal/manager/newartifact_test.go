@@ -13,8 +13,12 @@ import (
 
 // TestNewArtifactKindsMatchesSkeleton pins the wiring: this service's
 // NewArtifactKinds is a direct pass-through to skeleton.SupportedKinds(),
-// nothing more, so the frontend's picker learns about a future binding
-// scaffold (CW-20260903-0011) with no change to this package.
+// nothing more, so a future kind lighting up in that package's registry
+// needs no change to this package. bundle.KindBinding used to be one of
+// the kinds this test confirmed stayed absent (CW-20260903-0011 had not
+// landed); CW-20260904-0002 (T23) gave it a real scaffold, so it is
+// expected in NewArtifactKinds()'s result now, same as every other
+// supported kind.
 func TestNewArtifactKindsMatchesSkeleton(t *testing.T) {
 	svc := newService(t, newFixture(t))
 	got := svc.NewArtifactKinds()
@@ -25,11 +29,6 @@ func TestNewArtifactKindsMatchesSkeleton(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("NewArtifactKinds() = %v; want %v", got, want)
-		}
-	}
-	for _, k := range got {
-		if k == bundle.KindBinding {
-			t.Error("NewArtifactKinds() contains KindBinding -- must stay absent until CW-20260903-0011 lands")
 		}
 	}
 }
@@ -44,21 +43,27 @@ func TestNewArtifactCreatesEachSupportedKindAndAppearsInTree(t *testing.T) {
 	svc := newService(t, root)
 
 	cases := []struct {
-		kind bundle.Kind
-		id   string
+		kind   bundle.Kind
+		id     string
+		wantID string // what content.ID (and the Tree() node's ID) should be
 	}{
-		{bundle.KindProfile, "brandnew"},
-		{bundle.KindRoleProse, "brandnew"},
-		{bundle.KindTemplate, "brandnew"},
-		{bundle.KindSkill, "brandnew"},
+		{bundle.KindProfile, "brandnew", "brandnew"},
+		{bundle.KindRoleProse, "brandnew", "brandnew"},
+		{bundle.KindTemplate, "brandnew", "brandnew"},
+		{bundle.KindSkill, "brandnew", "brandnew"},
+		// Unlike every other kind, a binding's ID carries its file
+		// extension (bundle.BindingID's own documented convention,
+		// unchanged by CW-20260904-0002 / T23 — see internal/skeleton's
+		// bindingRefID).
+		{bundle.KindBinding, "brandnew", "brandnew.yaml"},
 	}
 	for _, tc := range cases {
 		content, err := svc.NewArtifact(string(tc.kind), tc.id, "Brand New", "A fresh description.")
 		if err != nil {
 			t.Fatalf("NewArtifact(%s, %s): %v", tc.kind, tc.id, err)
 		}
-		if content.Kind != tc.kind || content.ID != tc.id {
-			t.Fatalf("NewArtifact(%s, %s) returned %+v", tc.kind, tc.id, content)
+		if content.Kind != tc.kind || content.ID != tc.wantID {
+			t.Fatalf("NewArtifact(%s, %s) returned %+v; want ID %q", tc.kind, tc.id, content, tc.wantID)
 		}
 		if len(content.Bytes) == 0 {
 			t.Errorf("NewArtifact(%s, %s) returned empty Bytes", tc.kind, tc.id)
@@ -74,7 +79,7 @@ func TestNewArtifactCreatesEachSupportedKindAndAppearsInTree(t *testing.T) {
 				continue
 			}
 			for _, n := range g.Nodes {
-				if n.ID == tc.id {
+				if n.ID == tc.wantID {
 					found = true
 					if n.RelPath != content.RelPath {
 						t.Errorf("tree node RelPath = %q; want %q (from NewArtifact's own result)", n.RelPath, content.RelPath)
@@ -83,21 +88,23 @@ func TestNewArtifactCreatesEachSupportedKindAndAppearsInTree(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("%s %s created by NewArtifact does not appear in the next Tree()", tc.kind, tc.id)
+			t.Errorf("%s %s created by NewArtifact does not appear in the next Tree()", tc.kind, tc.wantID)
 		}
 	}
 }
 
-// TestNewArtifactRejectsBinding proves the manager layer does not quietly
-// paper over skeleton's refusal -- a caller that somehow requests a binding
+// TestNewArtifactRejectsHook proves the manager layer does not quietly
+// paper over skeleton's refusal -- a caller that somehow requests a hook
 // (the frontend's picker should never offer it, but nothing stops a direct
-// call) gets the same explicit, seam-naming error skeleton.New does, not a
-// generic failure.
-func TestNewArtifactRejectsBinding(t *testing.T) {
+// call) gets the same explicit error skeleton.New does, not a generic
+// failure. bundle.KindHook is the one kind that stays unsupported; binding
+// (CW-20260904-0002 / T23) is no longer in this category — see
+// TestNewArtifactCreatesEachSupportedKindAndAppearsInTree.
+func TestNewArtifactRejectsHook(t *testing.T) {
 	svc := newService(t, newFixture(t))
-	_, err := svc.NewArtifact(string(bundle.KindBinding), "x", "", "")
+	_, err := svc.NewArtifact(string(bundle.KindHook), "x", "", "")
 	if !errors.Is(err, skeleton.ErrKindNotSupported) {
-		t.Fatalf("NewArtifact(binding, ...) error = %v; want skeleton.ErrKindNotSupported", err)
+		t.Fatalf("NewArtifact(hook, ...) error = %v; want skeleton.ErrKindNotSupported", err)
 	}
 }
 
@@ -120,21 +127,25 @@ func TestNewArtifactRejectsADuplicateID(t *testing.T) {
 // its bytes back completely unedited (the same call the frontend's Save
 // button makes), and confirm the file on disk did not change by one byte.
 //
-// This exercises every kind NewArtifact supports, because the four
-// scaffolds are different enough (YAML frontmatter with a spec block, bare
-// prose, an HTML-comment-only template, a skill's two-field frontmatter)
-// that a byte-preservation bug in one shape would not necessarily show up in
-// another.
+// This exercises every kind NewArtifact supports, because the scaffolds
+// are different enough (YAML frontmatter with a spec block, bare prose, an
+// HTML-comment-only template, a skill's two-field frontmatter, a binding's
+// two blank scalars) that a byte-preservation bug in one shape would not
+// necessarily show up in another.
 func TestFreshlyCreatedArtifactRoundTripsThroughRealOpenSave(t *testing.T) {
 	root := newFixture(t)
 	svc := newService(t, root)
 
 	for _, kind := range skeleton.SupportedKinds() {
-		id := "roundtrip"
-		created, err := svc.NewArtifact(string(kind), id, "Round Trip", "Exercises the byte-preservation guarantee.")
+		created, err := svc.NewArtifact(string(kind), "roundtrip", "Round Trip", "Exercises the byte-preservation guarantee.")
 		if err != nil {
-			t.Fatalf("NewArtifact(%s, %s): %v", kind, id, err)
+			t.Fatalf("NewArtifact(%s, roundtrip): %v", kind, err)
 		}
+		// created.ID, not the "roundtrip" id just passed in, is what every
+		// further Open/Save call below must use: identical for every kind
+		// except binding, whose ID carries its file extension (see
+		// TestNewArtifactCreatesEachSupportedKindAndAppearsInTree).
+		id := created.ID
 
 		onDiskBefore, err := os.ReadFile(created.Path)
 		if err != nil {

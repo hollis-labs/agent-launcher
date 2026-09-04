@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/skeleton"
 )
@@ -18,7 +19,7 @@ func tempRoot(t *testing.T) string {
 	return t.TempDir()
 }
 
-func TestSupportedKindsExcludesBindingAndHook(t *testing.T) {
+func TestSupportedKindsExcludesOnlyHook(t *testing.T) {
 	got := skeleton.SupportedKinds()
 	if len(got) == 0 {
 		t.Fatal("SupportedKinds() is empty")
@@ -28,6 +29,7 @@ func TestSupportedKindsExcludesBindingAndHook(t *testing.T) {
 		bundle.KindRoleProse: true,
 		bundle.KindTemplate:  true,
 		bundle.KindSkill:     true,
+		bundle.KindBinding:   true,
 	}
 	seen := map[bundle.Kind]bool{}
 	for _, k := range got {
@@ -41,11 +43,8 @@ func TestSupportedKindsExcludesBindingAndHook(t *testing.T) {
 			t.Errorf("SupportedKinds() is missing %s", k)
 		}
 	}
-	if seen[bundle.KindBinding] {
-		t.Error("SupportedKinds() contains KindBinding -- it must stay absent until CW-20260903-0011 lands (see package doc)")
-	}
 	if seen[bundle.KindHook] {
-		t.Error("SupportedKinds() contains KindHook -- hook creation is out of this task's scope")
+		t.Error("SupportedKinds() contains KindHook -- hook creation is out of this package's scope")
 	}
 
 	// Order matches bundle.Kinds()'s stable presentational order, not
@@ -58,21 +57,6 @@ func TestSupportedKindsExcludesBindingAndHook(t *testing.T) {
 		if order[got[i-1]] >= order[got[i]] {
 			t.Fatalf("SupportedKinds() = %v is not in bundle.Kinds() order", got)
 		}
-	}
-}
-
-func TestNewRejectsUnsupportedKindBinding(t *testing.T) {
-	root := tempRoot(t)
-	_, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindBinding, ID: "x"})
-	if err == nil {
-		t.Fatal("New(KindBinding, ...) succeeded; want an error")
-	}
-	if !errors.Is(err, skeleton.ErrKindNotSupported) {
-		t.Fatalf("New(KindBinding, ...) error = %v; want ErrKindNotSupported", err)
-	}
-	if !strings.Contains(err.Error(), "CW-20260903-0011") {
-		t.Errorf("New(KindBinding, ...) error = %q; want it to name CW-20260903-0011 as the reason, "+
-			"not a silent or guessed refusal", err.Error())
 	}
 }
 
@@ -332,6 +316,75 @@ func TestNewCreatesSkill(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the skill just created does not appear in Skills() -- 'picked up without a restart' failed")
+	}
+}
+
+// TestNewCreatesBinding is CW-20260904-0002's (T23) proof that the binding
+// seam this package's doc used to describe as deferred is real: New writes
+// bindings/<id>.yaml directly (not through internal/binding.Store.Create,
+// which would reject the scaffold's empty placeholder values — see
+// scaffolds.go's bindingScaffold doc), and internal/binding's own reader
+// can immediately List and Get it back without erroring the whole
+// directory, because a present-but-empty profile/scope key is valid, not
+// corrupt.
+func TestNewCreatesBinding(t *testing.T) {
+	root := tempRoot(t)
+	ref, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindBinding, ID: "fresh"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Unlike every other kind, a binding's bundle.Ref.ID carries its file
+	// extension (bundle.BindingID's own documented convention).
+	if ref.Kind != bundle.KindBinding || ref.ID != "fresh.yaml" {
+		t.Fatalf("New returned ref %+v; want {binding fresh.yaml}", ref)
+	}
+
+	target := filepath.Join(root, "bindings", "fresh.yaml")
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", target, err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "profile:\n") || !strings.Contains(content, "scope:\n") {
+		t.Errorf("binding scaffold does not carry both blank profile: and scope: keys:\n%s", content)
+	}
+
+	// Round-trip through internal/bundle's own tree machinery, same as
+	// every other kind: picked up with no restart.
+	b, err := bundle.Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	bindings, err := b.Bindings()
+	if err != nil {
+		t.Fatalf("Bindings: %v", err)
+	}
+	found := false
+	for _, bd := range bindings {
+		if string(bd.Name) == "fresh.yaml" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the binding just created does not appear in Bindings() -- 'picked up without a restart' failed")
+	}
+
+	// internal/binding's own reader must accept the freshly scaffolded file
+	// immediately: a present, empty profile:/scope: pair is valid, not a
+	// parse failure that would take the rest of bindings/ down with it.
+	got, err := binding.Open(root).Get("fresh")
+	if err != nil {
+		t.Fatalf("binding.Open(root).Get(fresh): %v", err)
+	}
+	if got.Name != "fresh" || got.Profile != "" || got.Scope != "" {
+		t.Errorf("binding.Get(fresh) = %+v; want {fresh \"\" \"\"}", got)
+	}
+	list, err := binding.Open(root).List()
+	if err != nil {
+		t.Fatalf("binding.Open(root).List() with a freshly scaffolded, still-blank binding present: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "fresh" {
+		t.Fatalf("binding.Open(root).List() = %+v; want exactly one binding named %q", list, "fresh")
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/hollis-labs/tachyon/internal/binding"
 )
 
 // --- relPath functions: where each kind lands, mirroring internal/bundle's
@@ -11,12 +13,24 @@ import (
 // joins here — rather than exporting bundle's dirProfiles/dirTemplates/etc. —
 // keeps this package's only coupling to bundle's public surface (Open, Kind,
 // Ref, Kinds), which is what let this whole package be written and tested
-// without touching a single line of internal/bundle. ---
+// without touching a single line of internal/bundle. bundle.KindBinding's
+// relPath is [binding.BindingRelPath] itself, not a fifth function here —
+// see [registry]'s own doc for why. ---
 
 func profileRelPath(id string) string   { return path.Join("profiles", id+".md") }
 func roleProseRelPath(id string) string { return path.Join("templates", "roles", id+".md") }
 func templateRelPath(id string) string  { return path.Join("templates", id+".md") }
 func skillRelPath(id string) string     { return path.Join("skills", id, "SKILL.md") }
+
+// bindingRefID derives the ID a new binding's [bundle.Ref] carries: its
+// filename, extension included — path.Base of the same
+// [binding.BindingRelPath] call [entry.relPath] already made to place the
+// file, so the extension is spelled in exactly the one place
+// (internal/binding) that owns it, not duplicated here as a literal
+// ".yaml". This matches bundle.BindingID's own documented convention
+// ("the format is not pinned and the extension is part of the name") that
+// every other kind's ID deliberately does not follow — see [entry.refID].
+func bindingRefID(id string) string { return path.Base(binding.BindingRelPath(id)) }
 
 // profileScaffold renders profiles/<id>.md.
 //
@@ -176,6 +190,48 @@ func skillScaffold(spec Spec) []byte {
 	b.WriteString("     whatever procedure or reference this skill exists to save someone\n")
 	b.WriteString("     from re-deriving. Delete this comment once real content replaces\n")
 	b.WriteString("     it. -->\n")
+	return []byte(b.String())
+}
+
+// bindingScaffold renders bindings/<id>.yaml.
+//
+// It deliberately does NOT go through internal/binding's own
+// [binding.Store.Create]: that requires non-empty Profile and Scope
+// ([binding.Binding.Validate]), and Spec carries neither for a binding —
+// unlike a profile's "spec: {}" or a skill's blank body, "profile" and
+// "scope" are the only two things a binding file has, so there is no
+// content left to leave blank except those two values themselves. This
+// scaffold leaves both keys present with empty values ("profile:\n" /
+// "scope:\n"), matching the same "start blank, let the user fill in the
+// one thing that must be theirs" idiom every other scaffold in this file
+// uses. internal/binding's own scan treats a present-but-empty key as
+// valid, not corrupt (see that package's scan.go, scanScalarToken) — a
+// freshly scaffolded binding is readable immediately, if obviously
+// incomplete, rather than making the whole bindings/ directory fail to
+// list until it is edited (see that package's doc, "shape and existence
+// only, now failed loud," for why a truly *unrecognized* file — missing
+// either key entirely — is not this package's concern to avoid, but a
+// present, empty key is not that).
+//
+// This is "at minimum produce the exact same on-disk shape internal/binding
+// itself writes" (this task's own allowance) rather than "call
+// [binding.Store.Create] directly" (its stated preference) — a deliberate,
+// narrow exception to "don't reimplement file-writing logic" for exactly
+// the reason above, not an oversight. [registry]'s relPath for
+// bundle.KindBinding is [binding.BindingRelPath] itself, not a function
+// defined in this file, which is what keeps bindings/'s directory name and
+// ".yaml" extension known in exactly one place despite this scaffold's
+// content being written here rather than by internal/binding.
+func bindingScaffold(spec Spec) []byte {
+	_ = spec // no field of Spec is used by this scaffold today
+	var b strings.Builder
+	b.WriteString("# New binding -- `cairn boot <name>` looks here first, falling back to a\n")
+	b.WriteString("# profile of the same id. profile names a profile under profiles/\n")
+	b.WriteString("# (refused when the catalog is read if it does not exist, not here);\n")
+	b.WriteString("# scope is a literal path, never one of ../scopes.yaml's own alias keys.\n")
+	b.WriteString("# See bindings/README.md in this bundle for the full shape.\n")
+	b.WriteString("profile:\n")
+	b.WriteString("scope:\n")
 	return []byte(b.String())
 }
 

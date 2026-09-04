@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 )
 
@@ -39,9 +40,10 @@ type Spec struct {
 var (
 	// ErrInvalidID reports that Spec.ID does not match [idPattern].
 	ErrInvalidID = errors.New("skeleton: invalid id")
-	// ErrKindNotSupported reports a kind [registry] has no entry for. See the
-	// package doc's note on bundle.KindBinding, which is deliberately one of
-	// these today.
+	// ErrKindNotSupported reports a kind [registry] has no entry for —
+	// bundle.KindHook today, deliberately (hook creation is out of scope
+	// entirely; see the package doc). bundle.KindBinding used to be one of
+	// these too, before CW-20260904-0002 (T23) gave it a real scaffold.
 	ErrKindNotSupported = errors.New("skeleton: kind not supported")
 	// ErrAlreadyExists reports that the target path is already occupied. New
 	// creates; it never overwrites — a caller that wants to edit an existing
@@ -70,45 +72,50 @@ type entry struct {
 	relPath func(id string) string
 	// scaffold renders the file's full initial content.
 	scaffold func(spec Spec) []byte
+	// refID derives the ID [New] returns in its [bundle.Ref] from the
+	// caller's own id. Nil (every kind but binding) means the identity —
+	// the [bundle.Ref].ID a caller gets back is exactly the id it gave.
+	// bundle.KindBinding is the one kind where a [bundle.Ref].ID carries
+	// its file's extension (see bundle.BindingID's own doc: "the format is
+	// not pinned and the extension is part of the name"), so its entry
+	// sets this to append it — without New itself needing to know that
+	// binding is special.
+	refID func(id string) string
 }
 
 // registry is the seam.
 //
-// One entry per artifact kind [New] knows how to create today. Adding
-// bindings, once CW-20260903-0011 (T07) settles what a binding actually is:
-// add one more entry here, keyed bundle.KindBinding, with a relPath function
-// (the bundle-relative path a new binding lands at — a row inside the
-// bundle's own bindings storage, in whatever shape it is by the time this
-// lands: [R3]'s single file, or a path under some directory of one file per
-// binding, whichever internal/binding's interface actually says) and a
-// scaffold function for its starting content. Nothing else in this package —
-// not New, not SupportedKinds — and nothing in internal/manager's
-// NewArtifact/NewArtifactKinds wrapper needs to change: the whole dispatch
-// this package makes on kind is this one map.
+// One entry per artifact kind [New] knows how to create today. bundle.KindBinding's
+// entry (CW-20260904-0002 / T23) points at [binding.BindingRelPath] rather
+// than a relPath function defined in this package — see scaffolds.go's
+// bindingScaffold for why its starting content is not what
+// internal/binding's own [binding.Store.Create] would write, and why that
+// is still "the exact same on-disk shape" this package's own doc allowed
+// for. Nothing else in this package — not New, not SupportedKinds — and
+// nothing in internal/manager's NewArtifact/NewArtifactKinds wrapper needed
+// to change to add it: the whole dispatch this package makes on kind is
+// this one map.
 //
-// It is deliberately NOT built here. See the package doc.
+// bundle.KindHook has no entry: hook creation stays out of this package's
+// scope entirely (see the package doc), unrelated to bindings.
 var registry = map[bundle.Kind]entry{
 	bundle.KindProfile:   {relPath: profileRelPath, scaffold: profileScaffold},
 	bundle.KindRoleProse: {relPath: roleProseRelPath, scaffold: roleProseScaffold},
 	bundle.KindTemplate:  {relPath: templateRelPath, scaffold: templateScaffold},
 	bundle.KindSkill:     {relPath: skillRelPath, scaffold: skillScaffold},
-
-	// bundle.KindBinding: NOT YET -- depends on CW-20260903-0011 (T07)'s
-	// binding read/write interface, which had not landed as of this task.
-	// Do not guess the shape; see the package doc and New's explicit error
-	// for this kind below.
+	bundle.KindBinding:   {relPath: binding.BindingRelPath, scaffold: bindingScaffold, refID: bindingRefID},
 }
 
 // SupportedKinds reports which kinds [New] can create today, in
-// [bundle.Kinds]'s stable presentational order. bundle.KindBinding and
-// bundle.KindHook are never in this list: hook creation is out of this
-// task's scope entirely, and binding is the deliberately deferred seam — see
-// the package doc.
+// [bundle.Kinds]'s stable presentational order. bundle.KindHook is never in
+// this list: hook creation is out of this package's scope entirely — see
+// the package doc. bundle.KindBinding was excluded the same way before
+// CW-20260904-0002 (T23) gave it a real scaffold; it is included now.
 //
 // A caller (internal/manager.Service.NewArtifactKinds, and through it the
 // frontend's "new artifact" menu) uses this instead of hardcoding the list,
-// so the binding case lighting up later requires no frontend change: once
-// [registry] gains a bundle.KindBinding entry, it appears here automatically.
+// so a future kind lighting up requires no frontend change: once
+// [registry] gains an entry, it appears here automatically.
 func SupportedKinds() []bundle.Kind {
 	out := make([]bundle.Kind, 0, len(registry))
 	for _, k := range bundle.Kinds() {
@@ -126,7 +133,7 @@ func SupportedKinds() []bundle.Kind {
 // package doc's note on D5. It refuses to overwrite an existing file
 // ([ErrAlreadyExists]); refuses an id [validateID] rejects ([ErrInvalidID]);
 // and refuses a kind [registry] has no entry for ([ErrKindNotSupported],
-// which today includes bundle.KindBinding — see the package doc).
+// which today means only bundle.KindHook — see the package doc).
 //
 // root is opened the same way every other bundle operation opens it
 // ([bundle.Open]), so a bad root reports [bundle.ErrRootMissing] here exactly
@@ -144,12 +151,6 @@ func New(root string, spec Spec) (bundle.Ref, error) {
 
 	e, ok := registry[spec.Kind]
 	if !ok {
-		if spec.Kind == bundle.KindBinding {
-			return bundle.Ref{}, fmt.Errorf(
-				"%w: %s -- depends on CW-20260903-0011 (T07)'s binding read/write interface, "+
-					"which has not landed yet; see internal/skeleton's package doc",
-				ErrKindNotSupported, spec.Kind)
-		}
 		return bundle.Ref{}, fmt.Errorf("%w: %s", ErrKindNotSupported, spec.Kind)
 	}
 
@@ -199,7 +200,11 @@ func New(root string, spec Spec) (bundle.Ref, error) {
 	}
 	wrote = true
 
-	return bundle.Ref{Kind: spec.Kind, ID: id}, nil
+	refID := id
+	if e.refID != nil {
+		refID = e.refID(id)
+	}
+	return bundle.Ref{Kind: spec.Kind, ID: refID}, nil
 }
 
 // validateID rejects any id that would not round-trip safely: empty, or not

@@ -1,6 +1,7 @@
 // Package skeleton renders a starting file for a brand-new bundle artifact —
-// a role profile, a template, a piece of role prose, or a skill — and writes
-// it into the bundle so [github.com/hollis-labs/tachyon/internal/bundle]'s
+// a role profile, a template, a piece of role prose, a skill, or a
+// binding — and writes it into the bundle so
+// [github.com/hollis-labs/tachyon/internal/bundle]'s
 // next read finds it and [github.com/hollis-labs/tachyon/internal/manager]'s
 // tree shows it, with no restart and no cache to invalidate (bundle.Bundle
 // caches nothing; see its package doc).
@@ -29,20 +30,34 @@
 //
 // # The binding seam
 //
-// This package can create four of the bundle's five creatable artifact
-// kinds: profile, template, role prose, and skill (see [SupportedKinds]).
-// bundle.KindBinding is deliberately absent from [registry]. Its scaffold
-// depends on what CW-20260903-0011 (T07) settles as the shape of a binding —
-// a task running concurrently in a sibling worktree as this package was
-// written, and not yet landed. Guessing the shape here would either be
-// thrown away once T07's real interface exists, or worse, ship a shape T07's
-// own read/write code cannot parse.
+// This package can create five of the bundle's six artifact kinds:
+// profile, template, role prose, skill, and — since CW-20260904-0002 (T23)
+// — binding (see [SupportedKinds]). bundle.KindHook is the one kind
+// deliberately absent from [registry]; hook creation is out of this
+// package's scope entirely, unrelated to bindings.
 //
-// Adding it once T07 lands is exactly one more [registry] entry — a relPath
-// function naming where a new binding lands, and a scaffold function for its
-// starting content — and nothing else in this package, in
-// internal/manager's NewArtifact, or in the frontend's creatable-kind list
-// needs to change. See the comment on [registry] for the precise seam, and
-// internal/manager.Service.NewArtifactKinds for how the frontend learns which
-// kinds are live without hardcoding the list twice.
+// bundle.KindBinding stayed absent for longer than the other four: its
+// scaffold depended on what CW-20260903-0011 (T07) settled as the shape of
+// a binding, a task running concurrently in a sibling worktree as most of
+// this package was first written, and Cairn's own storage for bindings
+// moved out from under T07's implementation shortly after
+// (CW-20260904-0002 / T23 — see internal/binding's own doc for that
+// history). Guessing the shape early would have either been thrown away
+// once a real interface existed, or worse, shipped a shape internal/binding's
+// own read/write code could not parse.
+//
+// Adding it, now that internal/binding's directory-of-one-file-per-binding
+// interface is real, needed exactly one more [registry] entry: bindingScaffold
+// in scaffolds.go for the starting content, and
+// [github.com/hollis-labs/tachyon/internal/binding.BindingRelPath] — not a
+// relPath function defined in this package — for where a new binding
+// lands, so bindings/'s directory name and file extension stay known in
+// exactly the one place internal/binding itself defines them. Nothing else
+// in this package, in internal/manager's NewArtifact, or in the frontend's
+// creatable-kind list needed to change: SupportedKinds() and
+// internal/manager.Service.NewArtifactKinds both pick it up automatically,
+// the same "one more registry entry" seam this doc described before T23
+// landed. See scaffolds.go's own bindingScaffold doc for why its starting
+// content does not go through internal/binding's own
+// [github.com/hollis-labs/tachyon/internal/binding.Store.Create].
 package skeleton
