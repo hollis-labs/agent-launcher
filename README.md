@@ -157,6 +157,29 @@ Launch the package through LaunchServices, not by executing its inner binary:
 open build/bin/Tachyon.app
 ```
 
+With the package quit, the local tray acceptance check launches that exact app
+through LaunchServices, resolves its Accessibility frame, captures those menu-
+bar pixels, and fails if the mark is in macOS's visually blank overflow region:
+
+```sh
+./scripts/check-macos-tray.sh
+```
+
+The check needs Accessibility and Screen Recording access for the invoking
+terminal. Tachyon registers a first-run position default that places its single
+status item near the right side, avoiding the overflow measured on the target
+notched menu bar; a position the user later chooses by Command-dragging takes
+precedence.
+
+If a previously saved custom position is itself hidden, quit Tachyon, remove
+only that placement, and relaunch; the first-run default will be registered
+again:
+
+```sh
+defaults delete com.hollislabs.tachyon 'NSStatusItem Preferred Position Item-0'
+open build/bin/Tachyon.app
+```
+
 For the required macOS verification, enable `Tachyon.app` once in **System
 Settings → Privacy & Security → Accessibility**, launch it with the command
 above, and observe all of the following:
@@ -168,9 +191,9 @@ above, and observe all of the following:
    with `open`; Accessibility remains enabled without adding the app again, and
    the hotkey and tray still work.
 
-Those observations must be made by a person against the packaged application;
-successful signing, `go run .`, or automated process inspection does not prove
-them.
+Those observations must be made by a person against the packaged application.
+Successful signing, `go run .`, or the pixel-level tray preflight does not prove
+Accessibility persistence or real hotkey/menu interaction.
 
 ### Where the authority is
 
