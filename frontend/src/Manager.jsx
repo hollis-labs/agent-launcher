@@ -25,6 +25,15 @@ export default function Manager({ route }) {
   // below -- but bumping the key here too keeps this component correct on
   // its own, not dependent on that unrelated behavior staying true).
   const [bundleGeneration, setBundleGeneration] = useState(0);
+  // bundleDirtyRef is shared between <Bundle> (which writes the currently
+  // mounted instance's dirty state into it, and clears it on unmount — see
+  // Bundle's own effect below) and <BundleRootBar> (which reads it before
+  // calling SetRoot). A root change discards whatever <Bundle> currently
+  // has open exactly the same way clicking a different tree node already
+  // does; it must ask first, the same way, rather than silently losing an
+  // unsaved draft the instant "Change…"/"Reset to default" is clicked —
+  // both are reachable from every tab, with no navigation required.
+  const bundleDirtyRef = useRef(false);
 
   useEffect(() => {
     const onHash = () =>
@@ -43,10 +52,13 @@ export default function Manager({ route }) {
             CW-20260904-0019. The tree pane's own root-label (below, inside
             Bundle()) still shows the same value in context; this one is
             what stays on screen when the Bundle tab isn't. */}
-        <BundleRootBar onRootChanged={() => setBundleGeneration((g) => g + 1)} />
+        <BundleRootBar
+          dirtyRef={bundleDirtyRef}
+          onRootChanged={() => setBundleGeneration((g) => g + 1)}
+        />
       </header>
       <main className={tab === "bundle" ? "no-pad" : undefined}>
-        {tab === "settings" ? <Settings /> : <Bundle key={bundleGeneration} />}
+        {tab === "settings" ? <Settings /> : <Bundle key={bundleGeneration} dirtyRef={bundleDirtyRef} />}
       </main>
     </div>
   );
@@ -72,7 +84,7 @@ export default function Manager({ route }) {
 // (Palette.jsx) that this component has no handle on at all; that side of
 // "no restart" is Palette.jsx's own re-fetch-on-focus, not anything this
 // bar calls.
-function BundleRootBar({ onRootChanged }) {
+function BundleRootBar({ onRootChanged, dirtyRef }) {
   // null while the first Root() call is in flight.
   const [root, setRoot] = useState(null);
   const [status, setStatus] = useState(null); // {kind: 'ok'|'err', text}
@@ -95,8 +107,21 @@ function BundleRootBar({ onRootChanged }) {
 
   // applyRoot is shared by both "Change…" (a picked directory) and "Reset
   // to default" (Manager.DefaultRoot()'s own answer): both end the same
-  // way, a SetRoot call followed by telling Manager() to refresh.
+  // way, a SetRoot call followed by telling Manager() to refresh. Both also
+  // discard whatever <Bundle> currently has open (the fresh-mount-on-root-
+  // change in Manager()), so both are gated on the same confirm Bundle's
+  // own openNode already uses for the identical "an unsaved draft is about
+  // to disappear" moment. Checked here, in the one place both callers
+  // funnel through, rather than duplicated in choose()/resetToDefault(): a
+  // cancel must stop the root change before SetRoot is ever called, not
+  // after — no partial state change either way.
   const applyRoot = (dir) => {
+    if (
+      dirtyRef?.current &&
+      !window.confirm("Discard unsaved changes and switch the active bundle?")
+    ) {
+      return;
+    }
     const requestId = ++requestIdRef.current;
     setBusy(true);
     setStatus(null);
@@ -183,7 +208,7 @@ function refFor(node) {
   return `${node.kind} ${node.id}`;
 }
 
-function Bundle() {
+function Bundle({ dirtyRef: sharedDirtyRef } = {}) {
   const [tree, setTree] = useState(null);
   const [treeError, setTreeError] = useState(null);
   const [selectedRef, setSelectedRef] = useState(null);
@@ -213,6 +238,20 @@ function Bundle() {
   const dirty = selectedNode != null && draftText !== originalText;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
+  // Mirrored into the ref Manager() shares with BundleRootBar, so a root
+  // change can ask before discarding this instance's draft the same way
+  // openNode already does for a plain node switch. Cleared on unmount (tab
+  // switch away, or the key-bump remount a root change itself causes) so a
+  // stale "dirty" from an instance that's already gone can never block —
+  // or wrongly warn about — a later action once there is nothing left it
+  // would actually be discarding.
+  if (sharedDirtyRef) sharedDirtyRef.current = dirty;
+  useEffect(() => {
+    if (!sharedDirtyRef) return;
+    return () => {
+      sharedDirtyRef.current = false;
+    };
+  }, [sharedDirtyRef]);
   const canSave = selectedNode != null && loaded && !openError && !loadingContent && !saving;
 
   // currentRequestRef names whichever node openNode most recently started a

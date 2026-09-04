@@ -37,22 +37,32 @@ type rootSettings struct {
 	BundleRoot string `json:"bundle_root"`
 }
 
-// DefaultRootStore is the store under the user's config directory.
+// DefaultRootStore is the store under Tachyon's own state root.
 //
-// This deliberately builds its own "tachyon" (lowercase) directory name
-// under [state.Dir] rather than nesting inside [state.Root] ("Tachyon",
-// capitalized): that casing mismatch predates this package's convergence
-// onto internal/state and is preserved here byte-for-byte so an existing
-// user's bundle.json is not silently relocated by this change. [state.Dir]
-// is still the single place the per-user config directory itself is
-// located, so overriding it moves this path too, in lockstep with
-// [state.Root] and everything built on it.
+// bundle.json lives at [state.Root]/bundle.json — the same directory
+// internal/shell's preferences file (Root()/shell.json) and internal/boot's
+// boot root ([state.BootRoot]) already live under. An earlier version of
+// this function built its own separately-cased "tachyon" (lowercase)
+// directory name under [state.Dir], on the theory that it predated this
+// package's convergence onto internal/state and should stay put to avoid
+// relocating an existing user's bundle.json. That reasoning did not survive
+// contact with the actual filesystem: the default macOS volume is
+// case-insensitive but case-preserving, so "tachyon" and "Tachyon" name the
+// same physical directory the instant either exists — and internal/shell's
+// Store already creates "Tachyon" (writing shell.json into it) on every
+// app launch, before a user can ever reach a bundle-root change. So the two
+// spellings were never actually isolated from each other; Save was already
+// writing bundle.json inside [state.Root] in practice, just under a name
+// that read as though it were a sibling. This makes that the documented,
+// intended behavior instead of an accidental one, and removes the second
+// path-construction site — [state.Root] is the only place "Tachyon" (the
+// directory name) is spelled now.
 func DefaultRootStore() (RootStore, error) {
-	dir, err := state.Dir()
+	root, err := state.Root()
 	if err != nil {
-		return RootStore{}, fmt.Errorf("bundle: locating config dir: %w", err)
+		return RootStore{}, fmt.Errorf("bundle: locating state root: %w", err)
 	}
-	return RootStore{Path: filepath.Join(dir, "tachyon", "bundle.json")}, nil
+	return RootStore{Path: filepath.Join(root, "bundle.json")}, nil
 }
 
 // Load returns the persisted root, or "" when nothing has been saved yet.
