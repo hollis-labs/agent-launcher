@@ -8,15 +8,16 @@ import { Manager as ManagerAPI } from "./bridge.js";
 // minimizes the chance of the two colliding on the same lines.
 //
 // KIND_META here is a small, deliberately duplicated subset of
-// Manager.jsx's own KIND_META (profile/role-prose/template/skill/binding
-// only — this form never offers "hook", which is out of this task's scope).
-// Importing Manager.jsx's copy would create a circular module dependency
-// (Manager.jsx renders this component), so five lines of label/color are
-// repeated here instead.
+// Manager.jsx's own KIND_META (profile/role-prose/template/prompt/skill/
+// binding only — this form never offers "hook", which is out of this
+// task's scope). Importing Manager.jsx's copy would create a circular
+// module dependency (Manager.jsx renders this component), so six lines of
+// label/color are repeated here instead.
 const KIND_META = {
   profile: { label: "Profile", color: "#45c7b8" },
   "role-prose": { label: "Role prose", color: "#c78ee0" },
   template: { label: "Template", color: "#e0b04b" },
+  prompt: { label: "Prompt", color: "#e0708a" },
   skill: { label: "Skill", color: "#7fb0e0" },
   binding: { label: "Binding", color: "#8fce7a" },
 };
@@ -24,7 +25,7 @@ const KIND_META = {
 // KIND_ORDER is every kind this form could ever offer, in the order buttons
 // render. "binding" is always listed — see the disabled-button note below —
 // even though NewArtifactKinds() never includes it today.
-const KIND_ORDER = ["profile", "role-prose", "template", "skill", "binding"];
+const KIND_ORDER = ["profile", "role-prose", "template", "prompt", "skill", "binding"];
 
 // ID_PATTERN mirrors internal/skeleton's idPattern exactly, for immediate
 // feedback. The server is the actual authority — this is UX only, and a
@@ -37,11 +38,15 @@ const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 // role prose uses name only (as its heading); skill uses description only
 // (its frontmatter "name" is always the id, matching every real skill); a
 // template ignores both. Hiding fields a scaffold ignores keeps the form
-// from implying a knob that does nothing.
+// from implying a knob that does nothing. prompt uses name only, the same
+// way role prose does — promptScaffold's heading is "# " + displayName —
+// and no description, for the same reason: a prompt has no frontmatter to
+// put one in.
 const FIELD_SHAPE = {
   profile: { name: true, description: true },
   "role-prose": { name: true, description: false },
   template: { name: false, description: false },
+  prompt: { name: true, description: false },
   skill: { name: false, description: true },
   binding: { name: false, description: false },
 };

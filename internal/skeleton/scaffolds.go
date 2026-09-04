@@ -20,6 +20,7 @@ import (
 func profileRelPath(id string) string   { return path.Join("profiles", id+".md") }
 func roleProseRelPath(id string) string { return path.Join("templates", "roles", id+".md") }
 func templateRelPath(id string) string  { return path.Join("templates", id+".md") }
+func promptRelPath(id string) string    { return path.Join("prompts", id+".md") }
 func skillRelPath(id string) string     { return path.Join("skills", id, "SKILL.md") }
 
 // bindingRefID derives the ID a new binding's [bundle.Ref] carries: its
@@ -168,6 +169,48 @@ func templateScaffold(spec Spec) []byte {
 	b.WriteString("## Example\n")
 	b.WriteString("\n")
 	b.WriteString("- scope: <!-- cairn:value scope -->\n")
+	return []byte(b.String())
+}
+
+// promptScaffold renders prompts/<id>.md.
+//
+// This is the minimal-scaffold fallback CW-20260904-0006's own task body
+// names ("if the real file's shape doesn't obviously suggest a sensible
+// minimal starting template, keep the scaffold minimal"), not an invented
+// house style: the one real, non-README file in this bundle's prompts/ as
+// of 2026-09-03 (prompts/report.md) is a one-off, task-specific dispatch
+// report with its own four cairn:value markers particular to that prompt --
+// nothing about it generalizes into a shape every new prompt should start
+// from, the same way profiles/base.md is the abstract floor rather than a
+// template for an ordinary profile (see profileScaffold's own doc). So this
+// scaffold borrows roleProseScaffold's shape instead (a "# Title" heading
+// plus an explanatory HTML comment, no frontmatter) and states, once, as a
+// comment, the one fact prompts/README.md documents about what a prompt
+// IS -- quoted rather than invented: "A prompt is a template. It carries
+// the same <!-- cairn:slot ... --> and <!-- cairn:value ... --> markers
+// templates/ does" -- without writing any slot or value content into the
+// scaffold itself, since there is no real, general-purpose example of one
+// to derive that from.
+//
+// A prompt is plain markdown with no frontmatter (like role prose, unlike
+// a profile or a skill), which is also why this scaffold has nowhere to
+// put spec.Description: FIELD_SHAPE in frontend/src/NewArtifact.jsx hides
+// that field for this kind for the same reason it hides it for role prose.
+func promptScaffold(spec Spec) []byte {
+	var b strings.Builder
+	b.WriteString("# " + displayName(spec) + "\n")
+	b.WriteString("\n")
+	b.WriteString("<!-- New prompt scaffold. Plain markdown, no frontmatter. Cairn plants\n")
+	b.WriteString("     this file whole at .claude/commands/boot/" + spec.ID + ".md once it is\n")
+	b.WriteString("     declared (spec.prompts, or --prompt " + spec.ID + " for one launch), so a\n")
+	b.WriteString("     running session can invoke it as /boot:" + spec.ID + " -- nothing in\n")
+	b.WriteString("     Tachyon delivers it any other way. Per prompts/README.md in this\n")
+	b.WriteString("     bundle: \"A prompt is a template. It carries the same\n")
+	b.WriteString("     <!-- cairn:slot ... --> and <!-- cairn:value ... --> markers\n")
+	b.WriteString("     templates/ does\" -- substituted from the same slots and instance\n")
+	b.WriteString("     values a template's markers are. Nothing checks a marker's name or\n")
+	b.WriteString("     that it resolves to anything real (D8). Delete this comment and\n")
+	b.WriteString("     write the prompt's own content. -->\n")
 	return []byte(b.String())
 }
 

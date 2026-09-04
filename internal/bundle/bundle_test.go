@@ -43,7 +43,7 @@ func TestOpenMakesTheRootAbsolute(t *testing.T) {
 	}
 }
 
-func TestEnumeratesAllSixKinds(t *testing.T) {
+func TestEnumeratesAllSevenKinds(t *testing.T) {
 	b := openFixture(t)
 	c, err := b.Contents()
 	if err != nil {
@@ -68,6 +68,12 @@ func TestEnumeratesAllSixKinds(t *testing.T) {
 	}
 	// roles/ is a directory, not a template; .hidden-note.md is a dotfile.
 	wantEqual(t, "templates", templates, []string{"agents", "claude"})
+
+	prompts := make([]string, 0, len(c.Prompts))
+	for _, p := range c.Prompts {
+		prompts = append(prompts, string(p.ID))
+	}
+	wantEqual(t, "prompts", prompts, []string{"greeting", "report"})
 
 	skills := make([]string, 0, len(c.Skills))
 	for _, s := range c.Skills {
@@ -227,6 +233,7 @@ func TestMissingDirectoriesEnumerateEmpty(t *testing.T) {
 	for name, n := range map[string]int{
 		"role prose": len(c.RoleProse),
 		"templates":  len(c.Templates),
+		"prompts":    len(c.Prompts),
 		"skills":     len(c.Skills),
 		"hooks":      len(c.Hooks),
 		"bindings":   len(c.Bindings),
@@ -248,6 +255,7 @@ func TestReadRejectsUnknownAndEscapingRefs(t *testing.T) {
 		{Kind: bundle.KindProfile, ID: "../../go"},
 		{Kind: bundle.KindRoleProse, ID: "../agents"},
 		{Kind: bundle.KindTemplate, ID: "roles/architect"},
+		{Kind: bundle.KindPrompt, ID: "../report"},
 		{Kind: bundle.KindHook, ID: "README"},
 		{Kind: bundle.KindBinding, ID: "nested/inner.yaml"},
 		{Kind: bundle.KindSkill, ID: ".."},
@@ -299,8 +307,8 @@ func TestExpandRootHandlesTilde(t *testing.T) {
 
 func TestKindsCoversEveryKind(t *testing.T) {
 	kinds := bundle.Kinds()
-	if len(kinds) != 6 {
-		t.Fatalf("Kinds() has %d entries; the bundle has six artifact kinds", len(kinds))
+	if len(kinds) != 7 {
+		t.Fatalf("Kinds() has %d entries; the bundle has seven artifact kinds", len(kinds))
 	}
 	seen := map[bundle.Kind]bool{}
 	for _, k := range kinds {
@@ -310,7 +318,7 @@ func TestKindsCoversEveryKind(t *testing.T) {
 		seen[k] = true
 	}
 	for _, k := range []bundle.Kind{
-		bundle.KindProfile, bundle.KindRoleProse, bundle.KindTemplate,
+		bundle.KindProfile, bundle.KindRoleProse, bundle.KindTemplate, bundle.KindPrompt,
 		bundle.KindSkill, bundle.KindHook, bundle.KindBinding,
 	} {
 		if !seen[k] {

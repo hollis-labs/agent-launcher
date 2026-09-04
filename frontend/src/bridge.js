@@ -116,11 +116,13 @@ export const Binding = {
 // Composition(input) is CW-20260903-0017's compose form: the same
 // fire-and-forget contract, but input carries everything the palette's
 // compose controls can add on top of a target --
-// { target, skills, scope, sets, parts }, matching
+// { target, skills, prompts, scope, sets, parts }, matching
 // internal/launch.CompositionInput field for field (skills: string[],
-// sets: {slot, value}[], parts: string[]). skills is additive ONLY -- see
-// Palette.jsx's own comment on why that array must always start empty and
-// grow only from direct user action, never from anything a binding or
+// prompts: string[], sets: {slot, value}[], parts: string[]). prompts is
+// CW-20260904-0006's addition, mapped to Cairn's own --prompt flag exactly
+// as skills maps to --skill. Both skills and prompts are additive ONLY --
+// see Palette.jsx's own comment on why those arrays must always start empty
+// and grow only from direct user action, never from anything a binding or
 // profile already resolves to.
 export const Launch = {
   Binding: (name) => callService(LAUNCH_SERVICE, "Launch", name),

@@ -443,9 +443,10 @@ func TestResolveCwd(t *testing.T) {
 // exactly the shape the frontend sends across the Wails boundary.
 func TestCompositionFromInput_MapsEveryFieldToTheMatchingCairnFlag(t *testing.T) {
 	input := CompositionInput{
-		Target: "eng-nanite",
-		Skills: []string{"skill-one", "skill-two"},
-		Scope:  "/scope/path",
+		Target:  "eng-nanite",
+		Skills:  []string{"skill-one", "skill-two"},
+		Prompts: []string{"report", "onboarding"},
+		Scope:   "/scope/path",
 		Sets: []SetInput{
 			{Slot: "slot-one", Value: "value-one"},
 		},
@@ -466,6 +467,7 @@ func TestCompositionFromInput_MapsEveryFieldToTheMatchingCairnFlag(t *testing.T)
 		"--session", "current",
 		"--with", "extra-part",
 		"--skill", "skill-one,skill-two",
+		"--prompt", "report,onboarding",
 		"--set", "slot-one=value-one",
 		"--scope", "/scope/path",
 		"--json",
@@ -510,6 +512,9 @@ func TestCompositionFromInput_EmptyInputProducesTheSameMinimalArgvAsBareLaunch(t
 		if a == "--skill" {
 			t.Fatalf("argv %v contains --skill despite CompositionInput.Skills being empty -- exactly the fail-alone hazard", argv)
 		}
+		if a == "--prompt" {
+			t.Fatalf("argv %v contains --prompt despite CompositionInput.Prompts being empty -- exactly the fail-alone hazard", argv)
+		}
 	}
 }
 
@@ -542,6 +547,32 @@ func TestCompositionFromInput_SkillsPassThroughUnmodified(t *testing.T) {
 	}
 }
 
+// TestCompositionFromInput_PromptsPassThroughUnmodified is
+// TestCompositionFromInput_SkillsPassThroughUnmodified's exact mirror for
+// Prompts (CW-20260904-0006): what the palette typed is exactly, and only,
+// what reaches compose.Composition.Prompts -- no union, dedup, sort or
+// lookup applied anywhere in this function.
+func TestCompositionFromInput_PromptsPassThroughUnmodified(t *testing.T) {
+	cases := [][]string{
+		nil,
+		{},
+		{"solo"},
+		{"zeta", "alpha", "middle"}, // deliberately unsorted -- compositionFromInput must not sort
+	}
+	for _, prompts := range cases {
+		input := CompositionInput{Target: "x", Prompts: prompts}
+		comp := compositionFromInput(input, "/bundle", "/boot")
+		if len(comp.Prompts) != len(prompts) {
+			t.Fatalf("Prompts %v became %v (different length)", prompts, comp.Prompts)
+		}
+		for i := range prompts {
+			if comp.Prompts[i] != prompts[i] {
+				t.Fatalf("Prompts %v became %v (differs at index %d)", prompts, comp.Prompts, i)
+			}
+		}
+	}
+}
+
 // --- LaunchComposition orchestration (fakes only) ------------------------
 
 // TestRunComposition_FullCompositionReachesTheFakeRunnerVerbatim drives
@@ -556,10 +587,11 @@ func TestRunComposition_FullCompositionReachesTheFakeRunnerVerbatim(t *testing.T
 	rec := &spawnRecorder{}
 
 	input := CompositionInput{
-		Target: "eng-nanite",
-		Skills: []string{"qstatus"},
-		Sets:   []SetInput{{Slot: "role", Value: "marker"}},
-		Parts:  []string{"writer"},
+		Target:  "eng-nanite",
+		Skills:  []string{"qstatus"},
+		Prompts: []string{"report"},
+		Sets:    []SetInput{{Slot: "role", Value: "marker"}},
+		Parts:   []string{"writer"},
 	}
 	comp := compositionFromInput(input, "/bundle/root", t.TempDir())
 
@@ -577,6 +609,7 @@ func TestRunComposition_FullCompositionReachesTheFakeRunnerVerbatim(t *testing.T
 		"--session", "current",
 		"--with", "writer",
 		"--skill", "qstatus",
+		"--prompt", "report",
 		"--set", "role=marker",
 		"--json",
 	}
@@ -618,6 +651,28 @@ func TestBindingCarriesNoSkillsFieldToSeedFrom(t *testing.T) {
 	}
 }
 
+// TestBindingCarriesNoPromptsFieldToSeedFrom is
+// TestBindingCarriesNoSkillsFieldToSeedFrom's exact mirror for prompts
+// (CW-20260904-0006, acceptance criterion "write a test proving there's no
+// code path that could pre-populate it from an existing binding/profile's
+// prompts"): [binding.Binding] carries no field, under any name or JSON
+// tag, that could be read as "this binding's prompts" -- so even a
+// Palette.jsx that wanted to pre-populate its prompts control from a
+// binding has structurally nothing to seed it from.
+func TestBindingCarriesNoPromptsFieldToSeedFrom(t *testing.T) {
+	typ := reflect.TypeOf(binding.Binding{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if strings.Contains(strings.ToLower(f.Name), "prompt") {
+			t.Fatalf("binding.Binding.%s: field name contains %q -- a compose form could seed its prompts control from this", f.Name, "prompt")
+		}
+		tag := f.Tag.Get("json")
+		if strings.Contains(strings.ToLower(tag), "prompt") {
+			t.Fatalf("binding.Binding.%s: json tag %q contains %q -- a compose form could seed its prompts control from this", f.Name, tag, "prompt")
+		}
+	}
+}
+
 // --- Real end-to-end: a full composition through the real cairn binary --
 //
 // This test writes nothing outside a t.TempDir() -- see the "never
@@ -627,16 +682,25 @@ func TestBindingCarriesNoSkillsFieldToSeedFrom(t *testing.T) {
 // TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory
 // is this task's own required proof, run as a real integration test rather
 // than asserted only from --help text: a full composition -- a target
-// binding, an ADDED skill, an ADDED --with part, and a --set override --
-// through the real cairn binary against the real, read-only
-// ~/dev/projects/agent-setup bundle, into a scratch boot root this test
-// owns and t.TempDir() cleans up. It then reads the actual rendered files
-// cairn wrote and confirms all three landed:
+// binding, an ADDED skill, an ADDED prompt (CW-20260904-0006), an ADDED
+// --with part, and a --set override -- through the real cairn binary
+// against the real, read-only ~/dev/projects/agent-setup bundle, into a
+// scratch boot root this test owns and t.TempDir() cleans up. It then reads
+// the actual rendered files cairn wrote and confirms all four landed:
 //
 //   - the added skill's own content file exists under the composed boot
 //     directory's .claude/skills/, with the same content the installed
 //     skill source carries (proving cairn rendered it, not merely that a
 //     directory of that name exists);
+//   - the added prompt lands at .claude/commands/boot/<name>.md, its
+//     marker-free prose intact from prompts/<name>.md in the bundle and its
+//     cairn:value markers substituted with this composition's real
+//     instance values -- prompts turn out to be templated at plant time,
+//     not copied raw (see the assertion's own comment) -- this is
+//     CW-20260904-0006's own gate-verification requirement ("Verify
+//     --prompt against the installed binary"), proven for real against the
+//     binary actually installed on this machine rather than only against
+//     its --help text;
 //   - the added --with part's own skill (writer's "blg", which eng-nanite's
 //     own profile -- engineer -- does not declare on its own) exists too,
 //     proving the part reached rendering and was not silently folded away;
@@ -658,17 +722,21 @@ func TestBindingCarriesNoSkillsFieldToSeedFrom(t *testing.T) {
 // It skips, with a message saying why, only when a prerequisite is
 // genuinely absent from the machine running it: cairn not on PATH, the
 // ~/dev/projects/agent-setup bundle itself not present, or the "writer" /
-// "qstatus" fixtures this test's assertions are keyed to not existing in
-// it today (bundle content can move; a stale test target is a reason to
-// update this test, not a false failure). A bundle that IS present but
-// unreadable by this build of Tachyon is a different condition and FAILS
-// instead -- see [testbundle.Resolve]'s own doc, the same distinction
-// internal/boot/reconcile_test.go relies on.
+// "qstatus" / "report" fixtures this test's assertions are keyed to not
+// existing in it today (bundle content can move; a stale test target is a
+// reason to update this test, not a false failure). A bundle that IS
+// present but unreadable by this build of Tachyon is a different condition
+// and FAILS instead -- see [testbundle.Resolve]'s own doc, the same
+// distinction internal/boot/reconcile_test.go relies on.
 //
 // Nothing here writes into agent-setup -- --profile only reads it,
 // confirmed by this test's own before/after `git status --short` check on
-// that repo, exactly as this task's own standing rules require.
-func TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory(t *testing.T) {
+// that repo, exactly as this task's own standing rules require. Reading
+// the planted prompt's bytes below, to compare them against the bundle's
+// own source, is a TEST assertion confirming cairn's real behavior -- not
+// Tachyon application code reading prompt content, which is exactly what
+// CW-20260904-0006 forbids; see internal/compose's "no delivery" doc.
+func TestLaunchComposition_RealCairnRendersPartSkillPromptAndSetIntoTheBootDirectory(t *testing.T) {
 	cairnPath, err := exec.LookPath("cairn")
 	if err != nil {
 		t.Skipf("cairn not on PATH, skipping the real-composition end-to-end check: %v", err)
@@ -705,7 +773,8 @@ func TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory(t
 	// only be blamed on what this test itself just did.
 	beforeStatus := gitStatusShort(t, bundleRoot)
 
-	const addedSkill = "qstatus" // not in engineer.md's own `skills:` (search-first, surface-discovery)
+	const addedSkill = "qstatus"  // not in engineer.md's own `skills:` (search-first, surface-discovery)
+	const addedPrompt = "report" // prompts/report.md in the live bundle, as of 2026-09-03
 	const addedPart = "writer"   // contributes its own skill, "blg", which engineer.md does not declare
 	const partOnlySkill = "blg"  // writer.md's own skills: [blg]
 	const setSlot = "role"       // a slot engineer.md's own spec.slots declares
@@ -714,10 +783,11 @@ func TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory(t
 	scratchRoot := t.TempDir()
 
 	input := CompositionInput{
-		Target: target,
-		Skills: []string{addedSkill},
-		Parts:  []string{addedPart},
-		Sets:   []SetInput{{Slot: setSlot, Value: setMarker}},
+		Target:  target,
+		Skills:  []string{addedSkill},
+		Prompts: []string{addedPrompt},
+		Parts:   []string{addedPart},
+		Sets:    []SetInput{{Slot: setSlot, Value: setMarker}},
 	}
 	comp := compositionFromInput(input, bundleRoot, scratchRoot)
 
@@ -754,7 +824,61 @@ func TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory(t
 		t.Errorf("rendered skill file %s is empty", renderedSkillPath)
 	}
 
-	// 2) The ADDED --with part's own contribution (a skill engineer.md does
+	// 2) The ADDED prompt landed exactly where Cairn's design record says a
+	// prompt is planted -- .claude/commands/boot/<name>.md. This is
+	// CW-20260904-0006's own required proof that --prompt works against
+	// the real, installed binary, not just its --help text (which the
+	// gate-verification step of that task already read). Tachyon itself
+	// never reads this file's content anywhere in its own code -- see
+	// internal/compose's "no delivery" doc -- this read is the test
+	// confirming cairn's real behavior, not application logic.
+	//
+	// NOT byte-identical to the source: this run's very first attempt
+	// asserted exact equality and failed, which is itself the finding
+	// worth recording -- prompts/report.md's own <!-- cairn:value ... -->
+	// markers (binding/profile/scope/session) get substituted at plant
+	// time exactly like a template's do, matching prompts/README.md's own
+	// words ("A prompt is a template ... substituted from the same slots
+	// and instance values") more literally than this test first assumed.
+	// So the proof below is: the file exists, is non-empty, keeps the
+	// source's marker-free prose verbatim, and the substituted lines carry
+	// this composition's real instance values -- the same "substitution
+	// reached the document" shape assertion 4 below already uses for
+	// --set, not a raw-copy assumption. Tachyon does not perform this
+	// substitution and does not need to -- it only ever handed cairn a
+	// name.
+	plantedPromptPath := filepath.Join(bootDir, ".claude", "commands", "boot", addedPrompt+".md")
+	plantedPrompt, err := os.ReadFile(plantedPromptPath)
+	if err != nil {
+		t.Fatalf("expected the added prompt %q to be planted at %s: %v", addedPrompt, plantedPromptPath, err)
+	}
+	if len(plantedPrompt) == 0 {
+		t.Errorf("planted prompt %s is empty", plantedPromptPath)
+	}
+	sourcePromptPath := filepath.Join(bundleRoot, "prompts", addedPrompt+".md")
+	sourcePrompt, err := os.ReadFile(sourcePromptPath)
+	if err != nil {
+		t.Fatalf("reading the bundle's own source prompt %s: %v", sourcePromptPath, err)
+	}
+	for _, line := range strings.Split(string(sourcePrompt), "\n") {
+		if strings.Contains(line, "cairn:value") {
+			continue // this line is expected to change -- it is what substitution means
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.Contains(string(plantedPrompt), line) {
+			t.Errorf("planted prompt %s is missing a marker-free line the source carries verbatim: %q", plantedPromptPath, line)
+		}
+	}
+	if !strings.Contains(string(plantedPrompt), "binding: "+target) {
+		t.Errorf("planted prompt %s does not contain the substituted binding value %q -- substitution did not reach the document", plantedPromptPath, target)
+	}
+	if !strings.Contains(string(plantedPrompt), "session: current") {
+		t.Errorf("planted prompt %s does not contain the substituted session value %q -- substitution did not reach the document", plantedPromptPath, "current")
+	}
+
+	// 3) The ADDED --with part's own contribution (a skill engineer.md does
 	// not itself declare) also landed -- proving the part reached
 	// rendering, not just the target's own cascade.
 	partSkillPath := filepath.Join(bootDir, ".claude", "skills", partOnlySkill, "SKILL.md")
@@ -762,7 +886,7 @@ func TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory(t
 		t.Errorf("expected --with %s's own skill %q to render at %s (proving the part reached rendering): %v", addedPart, partOnlySkill, partSkillPath, err)
 	}
 
-	// 3) The --set override's value is present in the rendered AGENTS.md --
+	// 4) The --set override's value is present in the rendered AGENTS.md --
 	// proving the substitution reached the document cairn wrote.
 	agentsPath := filepath.Join(bootDir, "AGENTS.md")
 	agentsContent, err := os.ReadFile(agentsPath)

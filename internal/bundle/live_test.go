@@ -18,11 +18,16 @@ import (
 // this package's own Bindings() does not filter by extension (the binding
 // format is not pinned by Cairn — see internal/binding for the package
 // that reads it), so liveBindings counts all 8 *.yaml files plus
-// bindings/README.md.
+// bindings/README.md. prompts/ landed under CW-20260904-0005 (Cairn) /
+// CW-20260904-0006 (this task): livePrompts counts report.md plus
+// prompts/README.md, the same "the directory's own README counts too"
+// shape bindings/ already established — Prompts() filters by extension,
+// not by name.
 const (
 	liveProfiles  = 9
 	liveRoleProse = 8
 	liveTemplates = 4
+	livePrompts   = 2
 	liveSkills    = 17
 	liveHooks     = 3
 	liveBindings  = 9
@@ -64,6 +69,7 @@ func TestLiveBundleCensus(t *testing.T) {
 	t.Logf("profiles   %2d  %s", len(c.Profiles), joinProfiles(c.Profiles))
 	t.Logf("role prose %2d  %s", len(c.RoleProse), joinRoleProse(c.RoleProse))
 	t.Logf("templates  %2d  %s", len(c.Templates), joinTemplates(c.Templates))
+	t.Logf("prompts    %2d  %s", len(c.Prompts), joinPrompts(c.Prompts))
 	t.Logf("skills     %2d  %s", len(c.Skills), joinSkills(c.Skills))
 	t.Logf("hooks      %2d  %s", len(c.Hooks), joinHooks(c.Hooks))
 	t.Logf("bindings   %2d", len(c.Bindings))
@@ -77,6 +83,7 @@ func TestLiveBundleCensus(t *testing.T) {
 		{"profiles", len(c.Profiles), liveProfiles},
 		{"role prose", len(c.RoleProse), liveRoleProse},
 		{"templates", len(c.Templates), liveTemplates},
+		{"prompts", len(c.Prompts), livePrompts},
 		{"skills", len(c.Skills), liveSkills},
 		{"hooks", len(c.Hooks), liveHooks},
 		{"bindings", len(c.Bindings), liveBindings},
@@ -128,6 +135,10 @@ func TestLiveBundleCensus(t *testing.T) {
 	}
 	for _, tpl := range c.Templates {
 		readLive(t, b, tpl.Ref())
+		read++
+	}
+	for _, p := range c.Prompts {
+		readLive(t, b, p.Ref())
 		read++
 	}
 	for _, s := range c.Skills {
@@ -226,6 +237,14 @@ func joinRoleProse(in []bundle.RoleProse) string {
 }
 
 func joinTemplates(in []bundle.Template) string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = string(v.ID)
+	}
+	return strings.Join(out, " ")
+}
+
+func joinPrompts(in []bundle.Prompt) string {
 	out := make([]string, len(in))
 	for i, v := range in {
 		out[i] = string(v.ID)

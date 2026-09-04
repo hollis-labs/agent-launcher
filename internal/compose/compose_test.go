@@ -107,6 +107,59 @@ func buildCases(bootRoot string) []buildCase {
 			},
 		},
 		{
+			name: "prompts render as one comma-joined --prompt flag, not one flag per prompt",
+			comp: compose.Composition{
+				Target:   "architect",
+				Bundle:   "/bundle/root",
+				BootRoot: bootRoot,
+				Prompts:  []string{"report", "onboarding"},
+			},
+			want: []string{
+				"boot", "architect",
+				"--profile", "/bundle/root",
+				"--boot-root", bootRoot,
+				"--session", "current",
+				"--prompt", "report,onboarding",
+				"--json",
+			},
+		},
+		{
+			name: "a single prompt still renders through --prompt",
+			comp: compose.Composition{
+				Target:   "architect",
+				Bundle:   "/bundle/root",
+				BootRoot: bootRoot,
+				Prompts:  []string{"report"},
+			},
+			want: []string{
+				"boot", "architect",
+				"--profile", "/bundle/root",
+				"--boot-root", bootRoot,
+				"--session", "current",
+				"--prompt", "report",
+				"--json",
+			},
+		},
+		{
+			name: "skills and prompts together render as --skill then --prompt, both present",
+			comp: compose.Composition{
+				Target:   "architect",
+				Bundle:   "/bundle/root",
+				BootRoot: bootRoot,
+				Skills:   []string{"go-testing"},
+				Prompts:  []string{"report"},
+			},
+			want: []string{
+				"boot", "architect",
+				"--profile", "/bundle/root",
+				"--boot-root", bootRoot,
+				"--session", "current",
+				"--skill", "go-testing",
+				"--prompt", "report",
+				"--json",
+			},
+		},
+		{
 			name: "additional parts render as one repeated --with flag per part, in order",
 			comp: compose.Composition{
 				Target:   "engineer",
@@ -185,6 +238,7 @@ func buildCases(bootRoot string) []buildCase {
 				BootRoot: bootRoot,
 				Parts:    []string{"extra-part"},
 				Skills:   []string{"skill-one", "skill-two"},
+				Prompts:  []string{"report", "onboarding"},
 				Sets: []compose.Set{
 					{Slot: "slot-one", Value: "value-one"},
 				},
@@ -197,6 +251,7 @@ func buildCases(bootRoot string) []buildCase {
 				"--session", "current",
 				"--with", "extra-part",
 				"--skill", "skill-one,skill-two",
+				"--prompt", "report,onboarding",
 				"--set", "slot-one=value-one",
 				"--scope", "/scope/path",
 				"--json",

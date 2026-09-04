@@ -74,6 +74,7 @@ func TestVanishedRootIsNotAnEmptyBundle(t *testing.T) {
 				"Profiles":  func() error { _, err := b.Profiles(); return err },
 				"RoleProse": func() error { _, err := b.RoleProse(); return err },
 				"Templates": func() error { _, err := b.Templates(); return err },
+				"Prompts":   func() error { _, err := b.Prompts(); return err },
 				"Skills":    func() error { _, err := b.Skills(); return err },
 				"Hooks":     func() error { _, err := b.Hooks(); return err },
 				"Bindings":  func() error { _, err := b.Bindings(); return err },
@@ -133,7 +134,7 @@ func TestEmptyRootIsStillAnEmptyBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Contents on an empty but present root: %v", err)
 	}
-	if n := len(c.Profiles) + len(c.RoleProse) + len(c.Templates) + len(c.Skills) + len(c.Hooks) + len(c.Bindings); n != 0 {
+	if n := len(c.Profiles) + len(c.RoleProse) + len(c.Templates) + len(c.Prompts) + len(c.Skills) + len(c.Hooks) + len(c.Bindings); n != 0 {
 		t.Fatalf("empty bundle enumerated %d artifacts", n)
 	}
 }

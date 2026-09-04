@@ -27,7 +27,8 @@
 // own doc for the identical discipline one layer down: it starts
 // osascript and does not wait for it either.
 //
-// # Skills are additive only (CW-20260903-0017's fail-alone criterion)
+// # Skills, and prompts, are additive only (CW-20260903-0017's fail-alone
+// criterion, extended to prompts by CW-20260904-0006)
 //
 // [CompositionInput.Skills] is exactly what [compose.Composition.Skills]
 // becomes: skills to ADD on top of whatever the target's own profile
@@ -43,6 +44,11 @@
 // initial state to seed itself from even by accident. See
 // TestBindingCarriesNoSkillsFieldToSeedFrom in launch_test.go, which pins
 // that absence down as a permanent regression guard.
+//
+// [CompositionInput.Prompts] carries the identical property, for the
+// identical reason -- Cairn's own --prompt flag documents itself as
+// "Additive only, for the reason --skill is" -- and is pinned by the same
+// shape of guard, TestBindingCarriesNoPromptsFieldToSeedFrom.
 package launch
 
 import (
@@ -172,6 +178,17 @@ type CompositionInput struct {
 	// how the palette must build this slice.
 	Skills []string `json:"skills"`
 
+	// Prompts are added on top of whatever the target's profile cascade
+	// already declares under spec.prompts (CW-20260904-0006) — a name each,
+	// resolved by Cairn against prompts/, never a prompt's own content (see
+	// internal/compose's "no delivery" section). Governed by exactly the
+	// same additive-only rule as Skills, for the identical reason: Cairn's
+	// own --prompt flag is additive only ("Additive only, for the reason
+	// --skill is" — its own --help text), so a form that pre-checked a
+	// target's own prompts and let a person uncheck one would silently keep
+	// it anyway.
+	Prompts []string `json:"prompts"`
+
 	// Scope overrides the target's own scope. Empty leaves the target's
 	// resolved scope in force -- no --scope is sent at all, the same
 	// choice [launch] already makes for the plain Launch(name) path (see
@@ -242,10 +259,12 @@ func (s *Service) LaunchComposition(input CompositionInput) error {
 //
 // Every field copies straight across with no transformation but the
 // [SetInput]-to-[compose.Set] conversion (a JSON-tag concern only -- see
-// SetInput's own doc). In particular, Skills copies through unmodified:
-// nothing here unions it with anything, looks anything up by it, or
-// touches it at all beyond this direct assignment -- see the package doc's
-// "skills are additive only" section, and TestCompositionFromInput_SkillsPassThroughUnmodified.
+// SetInput's own doc). In particular, Skills and Prompts each copy through
+// unmodified: nothing here unions either with anything, looks anything up
+// by them, or touches them at all beyond this direct assignment -- see the
+// package doc's "additive only" section, and
+// TestCompositionFromInput_SkillsPassThroughUnmodified /
+// TestCompositionFromInput_PromptsPassThroughUnmodified.
 func compositionFromInput(input CompositionInput, bundleRoot, bootRoot string) compose.Composition {
 	sets := make([]compose.Set, len(input.Sets))
 	for i, set := range input.Sets {
@@ -257,6 +276,7 @@ func compositionFromInput(input CompositionInput, bundleRoot, bootRoot string) c
 		Bundle:   bundleRoot,
 		BootRoot: bootRoot,
 		Skills:   input.Skills,
+		Prompts:  input.Prompts,
 		Scope:    input.Scope,
 		Sets:     sets,
 		Parts:    input.Parts,

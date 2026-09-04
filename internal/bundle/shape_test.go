@@ -54,6 +54,13 @@ func TestHasKnownShape(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "just prompts/, nothing else",
+			build: func(t *testing.T, root string) {
+				mkdirAll(t, filepath.Join(root, "prompts"))
+			},
+			want: true,
+		},
+		{
 			name: "a fully populated bundle",
 			build: func(t *testing.T, root string) {
 				mkdirAll(t, filepath.Join(root, "profiles"))

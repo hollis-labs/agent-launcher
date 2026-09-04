@@ -1,6 +1,6 @@
 package bundle
 
-// Kind names one of the six artifact kinds a bundle holds.
+// Kind names one of the seven artifact kinds a bundle holds.
 //
 // The kind is part of an artifact's identity, not a label on it: profiles and
 // role prose share every basename in the bundle, so an id alone does not name
@@ -16,6 +16,15 @@ const (
 	// KindTemplate is templates/<id>.md — a document with cairn:slot and
 	// cairn:value markers. Top level only; roles/ is KindRoleProse.
 	KindTemplate Kind = "template"
+	// KindPrompt is prompts/<id>.md — a flat file, simpler than a template
+	// in shape (no roles/-style subdirectory to exclude), that Cairn plants
+	// whole at .claude/commands/boot/<id>.md so a running session can invoke
+	// it as /boot:<id>. Per prompts/README.md in the live bundle, a prompt
+	// "is a template" in content terms — it may carry the same cairn:slot
+	// and cairn:value markers — but nothing here delivers it anywhere: this
+	// package only ever hands back its bytes for the manager's own
+	// open/save (see plan CW-20260904-0006, "there is no delivery work").
+	KindPrompt Kind = "prompt"
 	// KindSkill is skills/<id>/SKILL.md — one directory per skill.
 	KindSkill Kind = "skill"
 	// KindHook is hooks/<id>.sh — referenced in place by settings, edited as
@@ -26,10 +35,10 @@ const (
 	KindBinding Kind = "binding"
 )
 
-// Kinds returns the six artifact kinds, in a stable order suitable for
+// Kinds returns the seven artifact kinds, in a stable order suitable for
 // grouping a tree. The order is presentational and carries no semantics.
 func Kinds() []Kind {
-	return []Kind{KindProfile, KindRoleProse, KindTemplate, KindSkill, KindHook, KindBinding}
+	return []Kind{KindProfile, KindRoleProse, KindTemplate, KindPrompt, KindSkill, KindHook, KindBinding}
 }
 
 // Artifact ids. Each kind has its own id type so that the compiler rejects a
@@ -44,6 +53,8 @@ type (
 	RoleProseID string
 	// TemplateID is the basename of a templates/*.md file, without ".md".
 	TemplateID string
+	// PromptID is the basename of a prompts/*.md file, without ".md".
+	PromptID string
 	// SkillID is the name of a directory under skills/.
 	SkillID string
 	// HookID is the basename of a hooks/*.sh file, without ".sh".
@@ -100,6 +111,20 @@ type Template struct {
 
 // Ref returns the template's handle.
 func (t Template) Ref() Ref { return Ref{Kind: KindTemplate, ID: string(t.ID)} }
+
+// Prompt is prompts/<id>.md — a flat, plain-markdown file. Unlike
+// [Template] it carries no roles/-style subdirectory to exclude and, unlike
+// [Profile] or [Skill], no frontmatter this package reads for display: it is
+// authored text, handled only as bytes (D5), with no delivery path anywhere
+// in Tachyon (see [KindPrompt]'s own doc).
+type Prompt struct {
+	ID      PromptID
+	Path    string
+	RelPath string
+}
+
+// Ref returns the prompt's handle.
+func (p Prompt) Ref() Ref { return Ref{Kind: KindPrompt, ID: string(p.ID)} }
 
 // Skill is skills/<id>/, whose editable file is SKILL.md.
 type Skill struct {
@@ -161,6 +186,7 @@ type Contents struct {
 	Profiles  []Profile
 	RoleProse []RoleProse
 	Templates []Template
+	Prompts   []Prompt
 	Skills    []Skill
 	Hooks     []Hook
 	Bindings  []Binding

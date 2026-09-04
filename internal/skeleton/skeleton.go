@@ -102,6 +102,7 @@ var registry = map[bundle.Kind]entry{
 	bundle.KindProfile:   {relPath: profileRelPath, scaffold: profileScaffold},
 	bundle.KindRoleProse: {relPath: roleProseRelPath, scaffold: roleProseScaffold},
 	bundle.KindTemplate:  {relPath: templateRelPath, scaffold: templateScaffold},
+	bundle.KindPrompt:    {relPath: promptRelPath, scaffold: promptScaffold},
 	bundle.KindSkill:     {relPath: skillRelPath, scaffold: skillScaffold},
 	bundle.KindBinding:   {relPath: binding.BindingRelPath, scaffold: bindingScaffold, refID: bindingRefID},
 }

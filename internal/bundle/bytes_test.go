@@ -35,6 +35,7 @@ func TestReadReturnsBytesUnchanged(t *testing.T) {
 		{Kind: bundle.KindProfile, ID: "awkward"}:      filepath.Join("profiles", "awkward.md"),
 		{Kind: bundle.KindRoleProse, ID: "awkward"}:    filepath.Join("templates", "roles", "awkward.md"),
 		{Kind: bundle.KindTemplate, ID: "awkward"}:     filepath.Join("templates", "awkward.md"),
+		{Kind: bundle.KindPrompt, ID: "awkward"}:       filepath.Join("prompts", "awkward.md"),
 		{Kind: bundle.KindSkill, ID: "awkward"}:        filepath.Join("skills", "awkward", "SKILL.md"),
 		{Kind: bundle.KindHook, ID: "awkward"}:         filepath.Join("hooks", "awkward.sh"),
 		{Kind: bundle.KindBinding, ID: "awkward.yaml"}: filepath.Join("bindings", "awkward.yaml"),

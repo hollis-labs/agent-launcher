@@ -16,6 +16,7 @@ const (
 	dirProfiles  = "profiles"
 	dirTemplates = "templates"
 	dirRoles     = "roles" // under dirTemplates
+	dirPrompts   = "prompts"
 	dirSkills    = "skills"
 	dirHooks     = "hooks"
 	dirBindings  = "bindings"
@@ -122,15 +123,15 @@ func (b *Bundle) Root() string { return b.root }
 // is what [Bundle.HasKnownShape] checks for. dirRoles is deliberately
 // excluded: it nests under dirTemplates rather than sitting at the root
 // itself, so its presence or absence says nothing about the root.
-var shapeDirs = []string{dirProfiles, dirTemplates, dirSkills, dirHooks, dirBindings}
+var shapeDirs = []string{dirProfiles, dirTemplates, dirPrompts, dirSkills, dirHooks, dirBindings}
 
 // HasKnownShape reports whether the root looks like a bundle at all: does
-// at least one of the five top-level artifact directories this package
+// at least one of the six top-level artifact directories this package
 // knows about exist directly under it?
 //
 // This is a shape check, not a content check (D8): it only looks at
 // directory names, never opens a file inside any of them, and is
-// satisfied by just one of the five being present. Its whole job is
+// satisfied by just one of the six being present. Its whole job is
 // telling apart two roots that both enumerate as "zero artifacts
 // everywhere" — a bundle that is genuinely empty (created, but nothing
 // has been added to it yet: profiles/ exists and has no files in it, say)
@@ -220,6 +221,31 @@ func (b *Bundle) Templates() ([]Template, error) {
 	return out, nil
 }
 
+// Prompts enumerates prompts/*.md, sorted by id.
+//
+// Flat files, like [Bundle.Templates] — simpler, in fact, since there is no
+// roles/-style subdirectory to exclude. Nothing here reads a prompt's body:
+// unlike a profile or a skill, a prompt carries no frontmatter this package
+// scans for display, so there is no Header field to populate. See
+// [Prompt]'s own doc for why: a prompt is handled only as bytes, with no
+// delivery path in Tachyon at all.
+func (b *Bundle) Prompts() ([]Prompt, error) {
+	names, err := b.listFiles(extMarkdown, dirPrompts)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Prompt, 0, len(names))
+	for _, name := range names {
+		rel := path.Join(dirPrompts, name)
+		out = append(out, Prompt{
+			ID:      PromptID(strings.TrimSuffix(name, extMarkdown)),
+			Path:    b.abs(rel),
+			RelPath: rel,
+		})
+	}
+	return out, nil
+}
+
 // Skills enumerates the directories under skills/, sorted by name.
 //
 // A directory missing its SKILL.md still enumerates, with HasSkillFile false —
@@ -290,7 +316,7 @@ func (b *Bundle) Bindings() ([]Binding, error) {
 	return out, nil
 }
 
-// Contents enumerates all six artifact kinds in one pass.
+// Contents enumerates all seven artifact kinds in one pass.
 func (b *Bundle) Contents() (Contents, error) {
 	var c Contents
 	var err error
@@ -301,6 +327,9 @@ func (b *Bundle) Contents() (Contents, error) {
 		return Contents{}, err
 	}
 	if c.Templates, err = b.Templates(); err != nil {
+		return Contents{}, err
+	}
+	if c.Prompts, err = b.Prompts(); err != nil {
 		return Contents{}, err
 	}
 	if c.Skills, err = b.Skills(); err != nil {
@@ -424,6 +453,8 @@ func (b *Bundle) Resolve(ref Ref) (string, error) {
 		return b.resolveFile(ref, extMarkdown, dirTemplates, dirRoles)
 	case KindTemplate:
 		return b.resolveFile(ref, extMarkdown, dirTemplates)
+	case KindPrompt:
+		return b.resolveFile(ref, extMarkdown, dirPrompts)
 	case KindHook:
 		return b.resolveFile(ref, extShell, dirHooks)
 	case KindBinding:

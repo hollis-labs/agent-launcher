@@ -30,11 +30,11 @@
 //
 // # The binding seam
 //
-// This package can create five of the bundle's six artifact kinds:
-// profile, template, role prose, skill, and — since CW-20260904-0002 (T23)
-// — binding (see [SupportedKinds]). bundle.KindHook is the one kind
-// deliberately absent from [registry]; hook creation is out of this
-// package's scope entirely, unrelated to bindings.
+// This package can create six of the bundle's seven artifact kinds:
+// profile, template, role prose, skill, prompt (CW-20260904-0006), and —
+// since CW-20260904-0002 (T23) — binding (see [SupportedKinds]).
+// bundle.KindHook is the one kind deliberately absent from [registry]; hook
+// creation is out of this package's scope entirely, unrelated to bindings.
 //
 // bundle.KindBinding stayed absent for longer than the other four: its
 // scaffold depended on what CW-20260903-0011 (T07) settled as the shape of

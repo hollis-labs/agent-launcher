@@ -24,6 +24,9 @@
 //	                     saved binding's name; Cairn disambiguates,
 //	                     this package does not need to know which)
 //	skills               one comma-joined --skill flag
+//	prompts              one comma-joined --prompt flag (CW-20260904-0006)
+//	                     — a name, never a prompt's own content; see
+//	                     "no delivery" below
 //	project / path       --scope <path>
 //	one-off direction    --set <slot>=<value>, one flag per Set
 //	additional parts     --with <name>, one flag per part
@@ -34,23 +37,36 @@
 // --boot-root, in the fixed order the target contract specifies:
 //
 //	boot <target> --profile <bundle> --boot-root <root> --session current
-//	     [--with <part>]... [--skill <a,b,c>] [--set <slot>=<value>]...
-//	     [--scope <path>] --json
+//	     [--with <part>]... [--skill <a,b,c>] [--prompt <a,b,c>]
+//	     [--set <slot>=<value>]... [--scope <path>] --json
 //
 // --session current and --json are unconditional — every invocation this
 // package builds carries both, with no Composition field controlling either
 // (see T09 for why the session id is always "current"; --json is how
 // whatever runs this argv gets machine-readable output back).
 //
-// Skills are one flag, not one per skill: the mapping table shows
-// "--skill a,b,c", not "--skill a --skill b --skill c", and that shape is
-// deliberate here — it is the one row in the table that renders as a single
-// flag carrying a joined list, distinct from --with and --set, which each
-// get their own flag per item. Order within that list, within --with, and
-// within --set is preserved exactly as given in Composition; this package
-// does not sort or deduplicate anything a caller handed it (D8's shape and
-// existence spirit — the caller owns what a value means, this package owns
-// only where it lands in argv).
+// Skills and Prompts are each one flag, not one per item: the mapping table
+// shows "--skill a,b,c" and "--prompt a,b,c", not "--skill a --skill b" /
+// "--prompt a --prompt b", and that shape is deliberate here — they are the
+// two rows in the table that render as a single flag carrying a joined
+// list, distinct from --with and --set, which each get their own flag per
+// item. Order within that list, within --with, and within --set is
+// preserved exactly as given in Composition; this package does not sort or
+// deduplicate anything a caller handed it (D8's shape and existence
+// spirit — the caller owns what a value means, this package owns only
+// where it lands in argv).
+//
+// # No delivery (CW-20260904-0006)
+//
+// Composition.Prompts carries prompt NAMES, resolved by Cairn against
+// prompts/ the same way Composition.Skills carries skill names resolved
+// against skills/ — never a prompt's own content. This package has no
+// field anywhere for prompt bytes, reads no prompt file, and would have
+// nowhere in argv to put one even if it did: --prompt takes names, and
+// nothing in the target contract accepts prompt content over argv, stdin,
+// or any other channel. A person types /boot:<name> once a session is
+// running (Cairn plants the file at .claude/commands/boot/<name>.md); this
+// package's whole job stops at getting the name into --prompt.
 //
 // # The hazard this package exists to close (D9)
 //

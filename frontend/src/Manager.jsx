@@ -186,6 +186,7 @@ const KIND_META = {
   profile: { label: "Profile", plural: "Profiles", color: "#45c7b8" },
   "role-prose": { label: "Role prose", plural: "Role prose", color: "#c78ee0" },
   template: { label: "Template", plural: "Templates", color: "#e0b04b" },
+  prompt: { label: "Prompt", plural: "Prompts", color: "#e0708a" },
   skill: { label: "Skill", plural: "Skills", color: "#7fb0e0" },
   hook: { label: "Hook", plural: "Hooks", color: "#e08a6c" },
   binding: { label: "Binding", plural: "Bindings", color: "#8fce7a" },
@@ -451,8 +452,9 @@ function Bundle({ dirtyRef: sharedDirtyRef } = {}) {
           <div className="tree-msg">
             <div className="err">This doesn't look like a Cairn bundle</div>
             <div className="muted" style={{ marginTop: 8 }}>
-              None of <code>profiles/</code>, <code>templates/</code>, <code>skills/</code>,{" "}
-              <code>hooks/</code> or <code>bindings/</code> exist under <code>{tree.root}</code>.
+              None of <code>profiles/</code>, <code>templates/</code>, <code>prompts/</code>,{" "}
+              <code>skills/</code>, <code>hooks/</code> or <code>bindings/</code> exist under{" "}
+              <code>{tree.root}</code>.
               Pick a different folder above, or reset to the default bundle.
             </div>
           </div>

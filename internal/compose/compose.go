@@ -35,6 +35,15 @@ type Composition struct {
 	// Omitted entirely when empty.
 	Skills []string
 
+	// Prompts renders as one comma-joined --prompt flag, in the order
+	// given — the exact same shape Skills renders as, matching --prompt's
+	// own --help text: "Comma-separated and repeatable, the two forms
+	// equivalent and composing. Additive only, for the reason --skill is."
+	// Omitted entirely when empty. There is deliberately no field here for
+	// a prompt's own content — Tachyon hands Cairn a name, never bytes; see
+	// this package's own doc, "no delivery."
+	Prompts []string
+
 	// Parts are the additional pieces layered over what the user authored.
 	// Each becomes its own --with flag, in order.
 	Parts []string
@@ -66,8 +75,8 @@ var (
 // Build renders c as the argv for `cairn boot`, in the fixed order:
 //
 //	boot <target> --profile <bundle> --boot-root <root> --session current
-//	     [--with <part>]... [--skill <a,b,c>] [--set <slot>=<value>]...
-//	     [--scope <path>] --json
+//	     [--with <part>]... [--skill <a,b,c>] [--prompt <a,b,c>]
+//	     [--set <slot>=<value>]... [--scope <path>] --json
 //
 // It does not include the program name ("cairn") itself — only the
 // arguments a caller passes to whatever runs that binary, which is a
@@ -99,6 +108,10 @@ func Build(c Composition) ([]string, error) {
 
 	if len(c.Skills) > 0 {
 		args = append(args, "--skill", strings.Join(c.Skills, ","))
+	}
+
+	if len(c.Prompts) > 0 {
+		args = append(args, "--prompt", strings.Join(c.Prompts, ","))
 	}
 
 	for _, s := range c.Sets {

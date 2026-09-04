@@ -28,6 +28,7 @@ func TestSupportedKindsExcludesOnlyHook(t *testing.T) {
 		bundle.KindProfile:   true,
 		bundle.KindRoleProse: true,
 		bundle.KindTemplate:  true,
+		bundle.KindPrompt:    true,
 		bundle.KindSkill:     true,
 		bundle.KindBinding:   true,
 	}
@@ -219,6 +220,64 @@ func TestNewCreatesRoleProse(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the role prose file just created does not appear in RoleProse()")
+	}
+}
+
+// TestNewCreatesPrompt is CW-20260904-0006's own acceptance criterion:
+// prompts/<id>.md, scaffolded from a title heading and an explanatory HTML
+// comment (roleProseScaffold's own shape) rather than any invented slot or
+// value content -- see promptScaffold's own doc for why. Writes into a
+// t.TempDir() bundle, exactly like every other kind's creation test in this
+// file; the real ~/dev/projects/agent-setup is never touched here.
+func TestNewCreatesPrompt(t *testing.T) {
+	root := tempRoot(t)
+	ref, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindPrompt, ID: "newprompt", Name: "New Prompt"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if ref.Kind != bundle.KindPrompt {
+		t.Fatalf("ref.Kind = %s; want prompt", ref.Kind)
+	}
+	target := filepath.Join(root, "prompts", "newprompt.md")
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", target, err)
+	}
+	content := string(data)
+	if !strings.HasPrefix(content, "# New Prompt\n") {
+		t.Errorf("prompt scaffold does not open with the heading:\n%s", content)
+	}
+	// Bare prose: no frontmatter delimiter at all, same as role prose.
+	if strings.HasPrefix(content, "---") {
+		t.Errorf("prompt scaffold has frontmatter; it must be bare prose:\n%s", content)
+	}
+	// D8, and this task's own "keep the scaffold minimal" instruction: the
+	// comment quotes prompts/README.md's own description of the marker
+	// shape (<!-- cairn:slot ... --> / <!-- cairn:value ... -->) but must
+	// not invent a real, specific marker of its own -- there is no
+	// general-purpose slot or value name to derive one from, only
+	// report.md's own task-specific ones (binding/profile/scope/session),
+	// which are particular to that one prompt, not to prompts in general.
+	if strings.Contains(content, "cairn:value scope") || strings.Contains(content, "cairn:value binding") {
+		t.Errorf("prompt scaffold invented a specific marker rather than staying minimal:\n%s", content)
+	}
+
+	b, err := bundle.Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	prompts, err := b.Prompts()
+	if err != nil {
+		t.Fatalf("Prompts: %v", err)
+	}
+	found := false
+	for _, p := range prompts {
+		if p.ID == "newprompt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the prompt just created does not appear in Prompts()")
 	}
 }
 

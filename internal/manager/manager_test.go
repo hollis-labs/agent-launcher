@@ -11,8 +11,8 @@ import (
 	"github.com/hollis-labs/tachyon/internal/manager"
 )
 
-// newFixture builds a small bundle covering all six artifact kinds, including
-// the named conflation trap: profiles/architect.md and
+// newFixture builds a small bundle covering all seven artifact kinds,
+// including the named conflation trap: profiles/architect.md and
 // templates/roles/architect.md share a basename.
 func newFixture(t *testing.T) string {
 	t.Helper()
@@ -32,6 +32,7 @@ func newFixture(t *testing.T) string {
 	write("profiles/base.md", "---\n# A comment interleaved with real keys, as in the live base.md.\nid: base\nname: Base\nspec:\n  # nested, must not be read as a header key\n  name: not-this\n---\n\nAbstract floor body.\n")
 	write("templates/roles/architect.md", "Prose for the architect role. Not a profile.\n")
 	write("templates/agents.md", "<!-- cairn:slot role -->\n\n<!-- cairn:slot standing -->\n<!-- cairn:slot repo -->\n\n## Profile\n")
+	write("prompts/report.md", "- binding: <!-- cairn:value binding -->\n- scope: <!-- cairn:value scope -->\n")
 	write("skills/commit/SKILL.md", "---\nid: commit\nname: Commit\n---\n\nHow to commit.\n")
 	write("skills/no-skill-file/NOTES.md", "not a skill file\n")
 	write("hooks/session-start.sh", "#!/bin/sh\necho hi\n")
@@ -48,7 +49,7 @@ func newService(t *testing.T, root string) *manager.Service {
 	return manager.New(store)
 }
 
-func TestTreeGroupsAllSixKindsInOrder(t *testing.T) {
+func TestTreeGroupsAllSevenKindsInOrder(t *testing.T) {
 	svc := newService(t, newFixture(t))
 	tr, err := svc.Tree()
 	if err != nil {
@@ -213,6 +214,82 @@ func TestOpenSaveRoundTripThroughJSON(t *testing.T) {
 	}
 	if !bytes.Equal(onDisk, []byte(awkward)) {
 		t.Fatalf("file on disk after an unedited open+save = %q; want %q (unchanged)", onDisk, awkward)
+	}
+}
+
+// TestPromptOpenSaveRoundTripPreservesMarkersAndAwkwardBytes is
+// CW-20260904-0006's own explicit proof that T05's byte-preservation
+// guarantee (D5 -- see TestOpenSaveRoundTripThroughJSON just above, which
+// this mirrors) covers bundle.KindPrompt too, now that it is registered,
+// rather than assuming it. The fixture is not synthetic hazard bytes alone:
+// it reproduces the exact shape ~/dev/projects/agent-setup/prompts/
+// report.md carries as of 2026-09-03 -- a <!-- cairn:value ... --> marker
+// sharing its line with other content, the same "- key: <!-- cairn:value
+// key -->" list-item form that file ends on -- with the CRLF/BOM/tab/
+// trailing-space/lone-CR/NUL/non-ASCII/no-trailing-newline hazards
+// bytes_test.go's awkwardBytes already names, layered on top so a single
+// test proves both "grounded in a real prompt's shape" and "survives the
+// worst bytes D5 has to survive" at once.
+//
+// D8 also applies here, implicitly: this test never inspects what the
+// marker names or asserts anything about it resolving -- Open/Save simply
+// do not look.
+func TestPromptOpenSaveRoundTripPreservesMarkersAndAwkwardBytes(t *testing.T) {
+	const promptContent = "\xEF\xBB\xBF# Report\r\n" +
+		"\r\n" +
+		"Write, in this order:\t\r\n" +
+		"\n\n\n" +
+		"A line with a lone carriage return.\rStill the same line.\n" +
+		"Non-ASCII: éü—✓ and a NUL: \x00 after it.\n" +
+		"\n" +
+		"- binding: <!-- cairn:value binding -->   \n" +
+		"- scope: <!-- cairn:value scope -->\n" +
+		"- session: <!-- cairn:value session -->" // no trailing newline
+
+	root := newFixture(t)
+	path := filepath.Join(root, "prompts", "awkward-report.md")
+	if err := os.WriteFile(path, []byte(promptContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	svc := newService(t, root)
+
+	opened, err := svc.Open(string(bundle.KindPrompt), "awkward-report")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if !bytes.Equal(opened.Bytes, []byte(promptContent)) {
+		t.Fatalf("Open returned %q; want the exact fixture bytes %q", opened.Bytes, promptContent)
+	}
+
+	// The same JSON round trip a Wails call result and argument actually go
+	// through (see TestOpenSaveRoundTripThroughJSON above).
+	wire, err := json.Marshal(opened)
+	if err != nil {
+		t.Fatalf("json.Marshal(opened): %v", err)
+	}
+	var overWire manager.Content
+	if err := json.Unmarshal(wire, &overWire); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if !bytes.Equal(overWire.Bytes, []byte(promptContent)) {
+		t.Fatalf("content changed crossing JSON:\n got: %q\nwant: %q", overWire.Bytes, promptContent)
+	}
+
+	// Save without editing -- the acceptance criterion's "open a real
+	// prompt, save it unedited" step.
+	saved, err := svc.Save(string(bundle.KindPrompt), "awkward-report", overWire.Bytes)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if !bytes.Equal(saved.Bytes, []byte(promptContent)) {
+		t.Fatalf("Save result content = %q; want %q", saved.Bytes, promptContent)
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(onDisk, []byte(promptContent)) {
+		t.Fatalf("file on disk after an unedited open+save = %q; want %q (unchanged -- this is the 'git diff is empty' criterion)", onDisk, promptContent)
 	}
 }
 

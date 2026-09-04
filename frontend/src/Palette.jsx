@@ -22,7 +22,8 @@ import { Binding, Launch, Shell } from "./bridge.js";
 // still; this window composes and launches, it does not persist a
 // composition as a binding of its own.
 //
-// # THE CORRECTNESS PROPERTY: skills are additive only, never inherited
+// # THE CORRECTNESS PROPERTY: skills (and prompts) are additive only, never
+// inherited
 //
 // `skills` below is a plain array of strings the user typed, starting
 // empty on every mount (useState([])) and growing ONLY through
@@ -40,6 +41,13 @@ import { Binding, Launch, Shell } from "./bridge.js";
 // anyway -- a wrong result that looks right. The label on the skills field
 // below says "Add skills for this launch" for exactly this reason: it is
 // never a picture of what the target already has.
+//
+// `prompts` (CW-20260904-0006) is built the identical way, through
+// addPrompts/removePrompt only, for the identical reason: Cairn's own
+// --prompt flag documents itself as "Additive only, for the reason --skill
+// is", and internal/binding.Binding has no prompts field either -- see
+// TestBindingCarriesNoPromptsFieldToSeedFrom. The prompts field's label
+// says "Add prompts for this launch" to match.
 //
 // # Three empty states, not one (CW-20260904-0002 / T23)
 //
@@ -76,6 +84,8 @@ export default function Palette() {
   // must never be seeded from anything but addSkill.
   const [skills, setSkills] = useState([]); // string[] — additive only
   const [skillDraft, setSkillDraft] = useState("");
+  const [prompts, setPrompts] = useState([]); // string[] — additive only (CW-20260904-0006)
+  const [promptDraft, setPromptDraft] = useState("");
   const [scope, setScope] = useState(""); // "" omits --scope entirely
   const [parts, setParts] = useState([]); // string[] — additional --with values
   const [partDraft, setPartDraft] = useState("");
@@ -162,6 +172,8 @@ export default function Palette() {
   function resetComposeDraft() {
     setSkills([]);
     setSkillDraft("");
+    setPrompts([]);
+    setPromptDraft("");
     setScope("");
     setParts([]);
     setPartDraft("");
@@ -200,6 +212,7 @@ export default function Palette() {
     Launch.Composition({
       target: target.name,
       skills,
+      prompts,
       scope: scope.trim(),
       sets,
       parts,
@@ -235,6 +248,21 @@ export default function Palette() {
   }
   function removeSkill(name) {
     setSkills((cur) => cur.filter((s) => s !== name));
+  }
+
+  // addPrompts is addSkills' exact mirror for --prompt (CW-20260904-0006):
+  // same comma-split ergonomics, same additive-only guarantee, the ONLY
+  // function in this file that ever grows `prompts`.
+  function addPrompts(raw) {
+    const additions = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s !== "" && !prompts.includes(s));
+    if (additions.length === 0) return;
+    setPrompts((cur) => [...cur, ...additions]);
+  }
+  function removePrompt(name) {
+    setPrompts((cur) => cur.filter((p) => p !== name));
   }
 
   function addPart(raw) {
@@ -316,6 +344,11 @@ export default function Palette() {
             setSkillDraft={setSkillDraft}
             addSkills={addSkills}
             removeSkill={removeSkill}
+            prompts={prompts}
+            promptDraft={promptDraft}
+            setPromptDraft={setPromptDraft}
+            addPrompts={addPrompts}
+            removePrompt={removePrompt}
             scope={scope}
             setScope={setScope}
             parts={parts}
@@ -356,9 +389,10 @@ export default function Palette() {
 }
 
 // ComposeSection is the compose form itself: one control per Cairn flag
-// (T08, CW-20260903-0012) beyond the target already chosen from the list
-// above — skills to ADD, a scope override, repeatable --set slot=value
-// pairs, and repeatable additional --with parts. There is deliberately no
+// (T08, CW-20260903-0012; prompts added by CW-20260904-0006) beyond the
+// target already chosen from the list above — skills to ADD, prompts to
+// ADD, a scope override, repeatable --set slot=value pairs, and repeatable
+// additional --with parts. There is deliberately no
 // template control here — template choice is authoring-time only (D4) and
 // contributes nothing to a composition. Ordering carries no meaning: chips
 // render in insertion order purely because that's the natural order for a
@@ -372,6 +406,11 @@ function ComposeSection(props) {
     setSkillDraft,
     addSkills,
     removeSkill,
+    prompts,
+    promptDraft,
+    setPromptDraft,
+    addPrompts,
+    removePrompt,
     scope,
     setScope,
     parts,
@@ -435,6 +474,50 @@ function ComposeSection(props) {
           </div>
         ) : (
           <div className="compose-empty muted">No skills added — this launch gets only what the profile already resolves to.</div>
+        )}
+      </div>
+
+      {/* Prompts: additive-only, the exact mirror of the skills field above
+          (CW-20260904-0006) — mapped to --prompt exactly as skills maps to
+          --skill. A prompt is a name Cairn resolves against prompts/, never
+          content typed here: nothing in this form reads or shows a
+          prompt's body. */}
+      <div className="compose-field">
+        <label htmlFor="compose-prompt-input">
+          Add prompts for this launch <span className="muted">(planted as /boot:&lt;name&gt; — nothing here can remove one already declared)</span>
+        </label>
+        <input
+          id="compose-prompt-input"
+          placeholder="prompt name, comma-separated — Enter to add"
+          spellCheck={false}
+          value={promptDraft}
+          onChange={(e) => setPromptDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Backspace" && promptDraft === "" && prompts.length > 0) {
+              removePrompt(prompts[prompts.length - 1]);
+              return;
+            }
+            onDraftEnter(e, () => {
+              if (promptDraft.trim() === "") return false;
+              addPrompts(promptDraft);
+              setPromptDraft("");
+              return true;
+            });
+          }}
+        />
+        {prompts.length > 0 ? (
+          <div className="compose-chips">
+            {prompts.map((p) => (
+              <span className="compose-chip" key={p}>
+                {p}
+                <button type="button" onClick={() => removePrompt(p)} title={`Remove ${p}`}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="compose-empty muted">No prompts added — this launch gets only what the profile already declares.</div>
         )}
       </div>
 

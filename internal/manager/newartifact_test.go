@@ -50,6 +50,7 @@ func TestNewArtifactCreatesEachSupportedKindAndAppearsInTree(t *testing.T) {
 		{bundle.KindProfile, "brandnew", "brandnew"},
 		{bundle.KindRoleProse, "brandnew", "brandnew"},
 		{bundle.KindTemplate, "brandnew", "brandnew"},
+		{bundle.KindPrompt, "brandnew", "brandnew"},
 		{bundle.KindSkill, "brandnew", "brandnew"},
 		// Unlike every other kind, a binding's ID carries its file
 		// extension (bundle.BindingID's own documented convention,

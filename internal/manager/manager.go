@@ -77,12 +77,13 @@ var kindLabels = map[bundle.Kind]KindLabel{
 	bundle.KindProfile:   {bundle.KindProfile, "Profile", "Profiles"},
 	bundle.KindRoleProse: {bundle.KindRoleProse, "Role prose", "Role prose"},
 	bundle.KindTemplate:  {bundle.KindTemplate, "Template", "Templates"},
+	bundle.KindPrompt:    {bundle.KindPrompt, "Prompt", "Prompts"},
 	bundle.KindSkill:     {bundle.KindSkill, "Skill", "Skills"},
 	bundle.KindHook:      {bundle.KindHook, "Hook", "Hooks"},
 	bundle.KindBinding:   {bundle.KindBinding, "Binding", "Bindings"},
 }
 
-// labelFor never returns the zero value for one of the six known kinds —
+// labelFor never returns the zero value for one of the seven known kinds —
 // kindLabels is exhaustive over [bundle.Kinds] and a test pins that.
 func labelFor(k bundle.Kind) KindLabel {
 	if l, ok := kindLabels[k]; ok {
@@ -141,8 +142,8 @@ type Group struct {
 // Tree is one enumeration of the whole bundle, grouped by kind, in the
 // stable order [bundle.Kinds] defines. A kind whose directory is absent
 // still appears, as a group with zero nodes — "no bindings yet" is a fact
-// about the bundle, not an error, and the row-of-six should not shrink to a
-// row-of-five because one directory does not exist today.
+// about the bundle, not an error, and the row-of-seven should not shrink to a
+// row-of-six because one directory does not exist today.
 type Tree struct {
 	// Root is the bundle root this tree was read from, absolute. Surfaced so
 	// the manager can show the user which bundle they are editing.
@@ -152,7 +153,7 @@ type Tree struct {
 	// situations that both enumerate as all-empty groups and both leave
 	// err nil (CW-20260904-0019): "ok" means the root looks like a real
 	// bundle — [bundle.Bundle.HasKnownShape] found at least one of the
-	// five known artifact directories under it — possibly still all-empty,
+	// six known artifact directories under it — possibly still all-empty,
 	// when there is genuinely nothing in it yet. "unrecognized" means the
 	// root exists and is readable but has none of them: the shape check
 	// (D8 — directory names only, never a file's content) that tells a
@@ -181,7 +182,7 @@ func (s *Service) Tree() (Tree, error) {
 	}
 
 	// t.Groups is never nil: the loop below runs once per bundle.Kinds(), a
-	// fixed six, and always appends. g.Nodes needs the same guarantee spelled
+	// fixed seven, and always appends. g.Nodes needs the same guarantee spelled
 	// out explicitly — nothing here ever appends to it for a kind with zero
 	// members (bindings/ does not exist in the live bundle today), and a nil
 	// []Node marshals to JSON `null`, not `[]`. That is not cosmetic: the
@@ -214,6 +215,12 @@ func (s *Service) Tree() (Tree, error) {
 			for _, tpl := range c.Templates {
 				g.Nodes = append(g.Nodes, Node{
 					Kind: k, ID: string(tpl.ID), Path: tpl.Path, RelPath: tpl.RelPath,
+				})
+			}
+		case bundle.KindPrompt:
+			for _, p := range c.Prompts {
+				g.Nodes = append(g.Nodes, Node{
+					Kind: k, ID: string(p.ID), Path: p.Path, RelPath: p.RelPath,
 				})
 			}
 		case bundle.KindSkill:
