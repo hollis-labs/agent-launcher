@@ -1,12 +1,19 @@
 package shell
 
+import (
+	"context"
+
+	"github.com/hollis-labs/tachyon/internal/boot"
+)
+
 // Service is the shell's surface to the frontend. It is bound through
 // application.NewService, so its exported methods are callable from JavaScript
 // as "<package path>.Service.<Method>".
 //
-// It is deliberately thin: everything here is window and hotkey management.
-// The bundle, composition and launch surfaces are separate services in later
-// tasks.
+// It is deliberately thin: everything here is window and hotkey management,
+// plus (CW-20260903-0019) the one manual action the manager's Settings
+// pane offers to clean up old boot directories. The bundle, composition
+// and launch surfaces are separate services in other tasks.
 type Service struct {
 	shell *Shell
 }
@@ -65,6 +72,25 @@ func (s *Service) OpenManager() { s.shell.OpenManager() }
 
 // HidePalette hides the palette window.
 func (s *Service) HidePalette() { s.shell.HidePalette() }
+
+// SweepBootDirectories is the manual action the manager's Settings pane
+// offers for CW-20260903-0019's .prev-* sweep: it calls the exact same
+// [Shell.SweepBootDirectories] method the app already calls once, in the
+// background, right after startup ([Shell.wireBootSweep]) — never a
+// second implementation of the sweep, never a different boot root or a
+// different lsof resolution. A person can use this to clean up
+// immediately after relaunching a binding rather than waiting for the
+// next full app restart, or simply to see the report (what was removed,
+// what was kept, and why) on demand.
+//
+// This is bound only to this button. There is no timer anywhere in this
+// package that calls it, and there must never be one — see
+// [Shell.wireBootSweep]'s doc.
+func (s *Service) SweepBootDirectories() (boot.Report, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), bootSweepTimeout)
+	defer cancel()
+	return s.shell.SweepBootDirectories(ctx)
+}
 
 func (s *Shell) settingsView() SettingsView {
 	p := s.prefs.Get()

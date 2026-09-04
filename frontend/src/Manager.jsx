@@ -376,6 +376,13 @@ function Settings() {
   const [settings, setSettings] = useState(null);
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState(null);
+  // CW-20260903-0019's manual boot-directory sweep. Independent of the
+  // hotkey state above -- its own request-id guard (sweeping is a slower,
+  // real filesystem-and-lsof operation, so a double-click must not let an
+  // older response clobber a newer one) and its own status display.
+  const [sweep, setSweep] = useState(null);
+  const [sweeping, setSweeping] = useState(false);
+  const sweepRequestIdRef = useRef(0);
   // Same class of guard as Bundle()'s currentRequestRef/treeRequestIdRef:
   // clicking "Bind and save" twice in quick succession with a changed draft
   // in between (or Enter, then a click before the first call returns) starts
@@ -413,6 +420,28 @@ function Settings() {
     }
   };
 
+  // runSweep is CW-20260903-0019's manual action: it calls the exact same
+  // Sweep the app already ran once, automatically, right after this
+  // window last started -- see internal/shell.Shell.wireBootSweep and
+  // bridge.js's own comment on Shell.SweepBootDirectories. There is no
+  // periodic re-check anywhere; this button, and the one automatic run at
+  // startup, are the only two times it ever runs.
+  const runSweep = async () => {
+    const requestId = ++sweepRequestIdRef.current;
+    setSweeping(true);
+    setSweep(null);
+    try {
+      const report = await Shell.SweepBootDirectories();
+      if (sweepRequestIdRef.current !== requestId) return; // superseded by a newer sweep
+      setSweep({ kind: report.guardOK ? "ok" : "warn", report });
+    } catch (e) {
+      if (sweepRequestIdRef.current !== requestId) return;
+      setSweep({ kind: "err", error: String(e.message ?? e) });
+    } finally {
+      if (sweepRequestIdRef.current === requestId) setSweeping(false);
+    }
+  };
+
   if (!settings) return <p className="note">Loading…</p>;
 
   return (
@@ -444,6 +473,29 @@ function Settings() {
           combination. Registration succeeding is not evidence the hotkey works —
           press it and see. If nothing happens, pick a different one here.
         </p>
+        <div>
+          <label>Old boot directories</label>
+          <p className="note">
+            Relaunching a binding leaves its previous boot directory behind,
+            renamed aside rather than deleted, in case a session was still
+            using it. This checks each one and removes only the ones nothing
+            still has open as a working directory — it already ran once,
+            automatically, when Tachyon last started; run it again here any
+            time.
+          </p>
+          <button onClick={runSweep} disabled={sweeping}>
+            {sweeping ? "Checking…" : "Clean up now"}
+          </button>
+        </div>
+        {sweep && (
+          <p className={sweep.kind}>
+            {sweep.error
+              ? `Sweep failed: ${sweep.error}`
+              : sweep.report.guardOK
+                ? `Removed ${sweep.report.swept.length}, kept ${sweep.report.skipped.length}.`
+                : `Could not verify it was safe to remove anything this time, so nothing was removed. ${sweep.report.guardDetail}`}
+          </p>
+        )}
       </div>
     </div>
   );

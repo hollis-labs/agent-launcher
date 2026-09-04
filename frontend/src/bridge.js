@@ -27,6 +27,15 @@ export const Shell = {
   ValidateHotkey: (accelerator) => call("ValidateHotkey", accelerator),
   OpenManager: () => call("OpenManager"),
   HidePalette: () => call("HidePalette"),
+  // SweepBootDirectories is CW-20260903-0019's manual cleanup action: it
+  // runs the exact same guarded .prev-* sweep Tachyon already runs once,
+  // automatically, at startup (internal/shell.Shell.wireBootSweep) --
+  // never a second implementation. The resolved promise is a Report:
+  // { swept: string[], skipped: {path, reason}[], guardOK: bool,
+  // guardDetail: string }. guardOK false means the liveness guard itself
+  // could not be trusted this run (see guardDetail) and nothing was
+  // removed -- that is not the same thing as "nothing needed cleaning up".
+  SweepBootDirectories: () => call("SweepBootDirectories"),
 };
 
 // Manager is internal/manager.Service: the bundle tree and the byte-exact

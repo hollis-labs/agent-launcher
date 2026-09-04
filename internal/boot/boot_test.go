@@ -453,20 +453,43 @@ func TestPrepare_RejectsEmptyRoot(t *testing.T) {
 
 // --- The delete hazard ------------------------------------------------------
 
+// removeAllAuthorized is the exact, exhaustive set of files in this
+// package permitted to reference RemoveAll -- as of T15 (CW-20260903-0019),
+// exactly one: sweep.go, which is this package's one deliberate, guarded
+// exception to "never delete" -- see this test's own doc comment for why
+// that exception belongs here rather than weakening the rule everywhere
+// else in the package.
+var removeAllAuthorized = map[string]bool{
+	"sweep.go": true,
+}
+
 // TestPackageNeverCallsRemoveAll is the acceptance bullet "no os.RemoveAll
-// (or equivalent) anywhere in this package" made mechanically checkable
-// rather than merely a claim in a commit message. It parses every .go file
-// in this package's directory -- production and test sources alike, this
-// file included -- and fails if the identifier RemoveAll is ever actually
-// referenced in code: as os.RemoveAll(...), as a bare RemoveAll(...) after a
-// dot-import, or assigned/passed as a func value.
+// (or equivalent) anywhere in this package [outside the one guarded
+// exception]" made mechanically checkable rather than merely a claim in a
+// commit message. It parses every .go file in this package's directory --
+// production and test sources alike, this file included -- and fails if
+// the identifier RemoveAll is ever actually referenced in code outside
+// [removeAllAuthorized]: as os.RemoveAll(...), as a bare RemoveAll(...)
+// after a dot-import, or assigned/passed as a func value.
+//
+// Until T15 (CW-20260903-0019) this package never deleted anything at
+// all -- [Prepare] only ever renames a boot directory aside, and this
+// test enforced that with a blanket ban. T15 adds the one place in
+// Tachyon that does delete: [Sweep], in sweep.go, and only ever a
+// .prev-* directory, and only ever behind the lsof liveness guard and its
+// per-run positive control documented on Sweep itself. That is a
+// deliberate, reviewed exception, not a loosening of the rule -- this
+// test still fails the build the moment RemoveAll (or an equivalent)
+// shows up anywhere else in this package, including in boot.go, key.go,
+// invoke.go, spawn.go, or a future file nobody added to the authorized
+// list above.
 //
 // This deliberately walks the AST rather than grepping file text, because a
 // plain substring search cannot tell a real call site from this package's
 // own doc comments and test names explaining, by name, exactly the function
-// this package must never call -- doc.go's rationale for the rename, and
-// this very test's own name and comment, both say "RemoveAll" in prose
-// without ever making the call.
+// this package must (almost) never call -- doc.go's rationale for the
+// rename, and this very test's own name and comment, both say "RemoveAll"
+// in prose without ever making the call.
 func TestPackageNeverCallsRemoveAll(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -486,6 +509,9 @@ func TestPackageNeverCallsRemoveAll(t *testing.T) {
 	fset := token.NewFileSet()
 	var offenders []string
 	for _, path := range matches {
+		if removeAllAuthorized[filepath.Base(path)] {
+			continue
+		}
 		f, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
@@ -501,6 +527,63 @@ func TestPackageNeverCallsRemoveAll(t *testing.T) {
 	if len(offenders) > 0 {
 		sort.Strings(offenders)
 		t.Fatalf("the identifier %q is referenced in code at: %v -- this package must only ever rename a "+
-			"boot directory aside, never delete one", forbidden, offenders)
+			"boot directory aside, or delete a .prev-* directory from within the authorized exception in "+
+			"sweep.go -- never delete anywhere else", forbidden, offenders)
+	}
+}
+
+// TestSweepIsTheOnlyRemoveAllCallSite double-checks
+// [removeAllAuthorized] itself is not quietly wrong: sweep.go really does
+// reference RemoveAll (so the exception is not dead weight hiding a typo'd
+// filename), and it is the only production (non-_test.go) file that does.
+// Between this and [TestPackageNeverCallsRemoveAll], "sweep.go, and only
+// sweep.go, and it really deletes" is enforced from both directions.
+func TestSweepIsTheOnlyRemoveAllCallSite(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed; cannot locate this package's directory")
+	}
+	dir := filepath.Dir(thisFile)
+
+	matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatalf("Glob: %v", err)
+	}
+
+	forbidden := "Remove" + "All"
+	fset := token.NewFileSet()
+	var productionOffenders []string
+	sweepReferencesIt := false
+	for _, path := range matches {
+		base := filepath.Base(path)
+		if strings.HasSuffix(base, "_test.go") {
+			continue // this test only cares about production sources
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		found := false
+		ast.Inspect(f, func(n ast.Node) bool {
+			if ident, ok := n.(*ast.Ident); ok && ident.Name == forbidden {
+				found = true
+			}
+			return true
+		})
+		if found {
+			if base == "sweep.go" {
+				sweepReferencesIt = true
+			} else {
+				productionOffenders = append(productionOffenders, base)
+			}
+		}
+	}
+	if !sweepReferencesIt {
+		t.Error("sweep.go does not reference RemoveAll at all -- removeAllAuthorized's exception is stale " +
+			"and should be removed, or Sweep no longer deletes anything, which would be worth knowing")
+	}
+	if len(productionOffenders) > 0 {
+		sort.Strings(productionOffenders)
+		t.Errorf("production files other than sweep.go reference RemoveAll: %v", productionOffenders)
 	}
 }
