@@ -15,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/icons"
 
+	"github.com/hollis-labs/tachyon/internal/apply"
 	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/bundle"
@@ -103,6 +104,13 @@ func New(cfg Config) (*Shell, error) {
 	// Same rootStore again: a launch resolves the binding the palette just
 	// showed, from the same bundle everything else above is reading.
 	launcher := launch.NewService(rootStore)
+	// Same rootStore a fourth time: Apply (CW-20260904-0023) stages
+	// whichever bundle everything else above is reading. apply.Options{}
+	// (the zero value) is real behavior — the real AGENTS_HOME
+	// (apply.ResolveAgentsHome) and a real `make install-system` runner
+	// (apply.ExecRunner) — never overridden here; only this package's own
+	// tests override either.
+	stager := apply.NewService(rootStore, apply.Options{})
 
 	s := &Shell{
 		log:           log,
@@ -131,6 +139,7 @@ func New(cfg Config) (*Shell, error) {
 			application.NewService(mgr),
 			application.NewService(bindings),
 			application.NewService(launcher),
+			application.NewService(stager),
 		},
 		LogLevel: slog.LevelWarn,
 	})
