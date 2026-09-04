@@ -169,8 +169,8 @@ type SetInput struct {
 // applied to it anywhere in this method -- exactly what was typed, and
 // nothing else.
 type CompositionInput struct {
-	// Target is the boot target -- a saved binding's name, the same value
-	// [Service.Launch] takes as its own bare argument. Required.
+	// Target is the boot target -- either a saved binding's name or a bare
+	// profile id, both accepted directly by Cairn. Required.
 	Target string `json:"target"`
 
 	// Skills are added on top of whatever the target's profile cascade
@@ -357,22 +357,20 @@ func launch(ctx context.Context, b binding.Binding, bundleRoot, bootRoot string,
 // "nothing here computes a skills union" a property of the whole package,
 // not just of whichever caller happened to be audited.
 //
-// comp.Target is always used as [boot.Key]'s seed, unmodified: both
-// callers build comp.Target from a saved binding's name (see [launch]'s
-// own doc and [Service.LaunchComposition]'s), so the same binding always
-// resolves to the same stable boot directory regardless of what a
-// particular launch also composed on top of it -- exactly the T10
-// stable-directory contract this package has relied on since before this
-// function had two callers.
+// comp.Target is always used as [boot.Key]'s seed, unmodified. It may be a
+// saved binding name or, for a bindingless composition, a bare profile id;
+// either way the same target resolves to the same stable boot directory
+// regardless of what a particular launch also composes on top of it --
+// exactly the T10 stable-directory contract this package has relied on
+// since before this function had two callers.
 func runComposition(ctx context.Context, comp compose.Composition, bootRoot string, runner boot.Runner, spawn spawnFunc) error {
 	// Clear the target before cairn plants into it. cairn boot refuses an
 	// already-occupied Current (bootdir.PlantFiles's ErrExists) -- without
 	// this, only ever the very first launch of a given binding would
 	// succeed. Prepare renames any existing current aside rather than
 	// deleting it (T09), which is exactly the stable-directory contract
-	// this whole package's Composition.Target = b.Name choice above relies
-	// on: the same key T10 already proved reconciles with what cairn plants
-	// under.
+	// this whole package's stable Composition.Target choice relies on: the
+	// same key T10 already proved reconciles with what cairn plants under.
 	if _, err := boot.Prepare(bootRoot, boot.Key(comp.Target)); err != nil {
 		return fmt.Errorf("launch: preparing boot directory: %w", err)
 	}

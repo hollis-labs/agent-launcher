@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Binding, Launch, Shell } from "./bridge.js";
+import { Binding, Launch, Manager, Project, Shell } from "./bridge.js";
 
 // The palette lists the active bundle's bindings, filterable by name, and
 // lets the user move a selection over them with the mouse or the arrow
-// keys. Below the list is the compose form (CW-20260903-0017): skills to
-// ADD, a scope override, one-off --set values and additional --with parts,
-// all layered on top of whichever binding is currently highlighted. Enter
-// (from the search box, or from an empty compose field -- see
-// attemptLaunch and each field's own onKeyDown) resolves the highlighted
-// binding plus whatever has been composed through
+// keys. The compose form has two explicit target modes: additions layered
+// over the highlighted binding (CW-20260903-0017), or a one-time launch
+// starting from a bare profile with no binding selected at all
+// (CW-20260904-0029). Enter (from the search box, or from an empty compose
+// field -- see attemptLaunch and each field's own onKeyDown) resolves that
+// target plus whatever has been composed through
 // internal/launch.Service.LaunchComposition -- runs `cairn boot` for it
 // and spawns iTerm2 on the result (CW-20260903-0016) -- and dismisses the
 // palette on success; a launch failure is shown inline instead, and the
@@ -18,9 +18,9 @@ import { Binding, Launch, Shell } from "./bridge.js";
 // Launch.* in response to Escape, so a compose-in-progress is safe to
 // abandon that way.
 //
-// Saving a composition as a new binding (CW-20260903-0018) is further out
-// still; this window composes and launches, it does not persist a
-// composition as a binding of its own.
+// Binding authoring now exists in the manager (CW-20260904-0028), and only
+// there. This window composes and launches; it never persists a composition
+// as a binding of its own.
 //
 // # THE CORRECTNESS PROPERTY: skills (and prompts) are additive only, never
 // inherited
@@ -75,6 +75,19 @@ export default function Palette() {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef(null);
+  const baseProfileRef = useRef(null);
+
+  // The palette reads suggestion values from the same active bundle tree
+  // the manager shows and the same Tachyon Projects registry the manager
+  // edits. They are hints only: every control below remains an ordinary
+  // text input, so a value that is not in either source still flows to
+  // Cairn unchanged (D8). Loading is deliberately independent from
+  // Binding.List(): composing from a bare profile is most useful when the
+  // bundle has no bindings at all, and a missing/unreadable bindings/
+  // directory must not take this entry point down with it.
+  const [catalogTree, setCatalogTree] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [suggestionErrors, setSuggestionErrors] = useState({});
 
   // --- compose-form draft state (CW-20260903-0017) -----------------------
   // One shared draft, layered on top of whichever row is highlighted below
@@ -93,8 +106,56 @@ export default function Palette() {
   const [setSlotDraft, setSetSlotDraft] = useState("");
   const [setValueDraft, setSetValueDraft] = useState("");
 
+  // CW-20260904-0029 adds one explicit second target mode. false preserves
+  // the existing highlighted-binding behavior; true means no binding is
+  // selected and baseProfile is sent as CompositionInput.Target instead.
+  const [bindingless, setBindingless] = useState(false);
+  const [baseProfile, setBaseProfile] = useState("");
+
   useEffect(() => {
     document.body.classList.add("palette");
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let requestId = 0;
+    const loadSuggestions = () => {
+      const myRequestId = ++requestId;
+
+      // These calls intentionally settle independently. Project.List can
+      // fail because binding associations are unreadable while Manager.Tree
+      // still has perfectly good profile/skill/prompt suggestions (and vice
+      // versa); neither failure is a reason to reject free-text composition.
+      Manager.Tree()
+        .then((tree) => {
+          if (cancelled || myRequestId !== requestId) return;
+          setCatalogTree(tree);
+          setSuggestionErrors((cur) => ({ ...cur, catalog: "" }));
+        })
+        .catch((err) => {
+          if (cancelled || myRequestId !== requestId) return;
+          setCatalogTree(null);
+          setSuggestionErrors((cur) => ({ ...cur, catalog: String(err?.message ?? err) }));
+        });
+
+      Project.List()
+        .then((views) => {
+          if (cancelled || myRequestId !== requestId) return;
+          setProjects(views ?? []);
+          setSuggestionErrors((cur) => ({ ...cur, projects: "" }));
+        })
+        .catch((err) => {
+          if (cancelled || myRequestId !== requestId) return;
+          setProjects([]);
+          setSuggestionErrors((cur) => ({ ...cur, projects: String(err?.message ?? err) }));
+        });
+    };
+    loadSuggestions();
+    window.addEventListener("focus", loadSuggestions);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", loadSuggestions);
+    };
   }, []);
 
   useEffect(() => {
@@ -145,15 +206,25 @@ export default function Palette() {
     setActiveIndex((i) => (filtered.length === 0 ? 0 : Math.min(i, filtered.length - 1)));
   }, [filtered.length]);
 
-  const activeTarget = filtered[activeIndex] ?? null;
+  const activeTarget = bindingless ? null : filtered[activeIndex] ?? null;
+
+  const catalog = useMemo(
+    () => Object.fromEntries((catalogTree?.groups ?? []).map((group) => [group.kind, (group.nodes ?? []).map((node) => node.id)])),
+    [catalogTree],
+  );
+  const profileSuggestions = catalog.profile ?? [];
+  const skillSuggestions = catalog.skill ?? [];
+  const promptSuggestions = catalog.prompt ?? [];
+  const projectSuggestions = projects.map((view) => ({
+    name: view.project.name,
+    path: view.project.path,
+  }));
 
   // resetComposeDraft clears every compose-form field back to its initial,
-  // empty state. Called from two places: attemptLaunch's success path
-  // (below — a spent composition must not silently reapply to a later
-  // launch), and the window "blur" listener just below this component's
-  // other effects (an *abandoned* composition — Escape, or clicking away —
-  // must not silently survive to reapply to a completely different binding
-  // the next time the palette is summoned).
+  // empty state. Called from attemptLaunch's success path (a spent
+  // composition must not silently reapply), the window "blur" listener
+  // just below (today's dismissal behavior), and the explicit start-from-
+  // nothing action (T33 says that action begins a new draft).
   //
   // Why "blur" specifically: this window is opened with HideOnFocusLost —
   // see internal/shell/shell.go's paletteOptions — so for THIS window,
@@ -180,6 +251,8 @@ export default function Palette() {
     setSets([]);
     setSetSlotDraft("");
     setSetValueDraft("");
+    setBaseProfile("");
+    setBindingless(false);
   }
 
   useEffect(() => {
@@ -187,9 +260,10 @@ export default function Palette() {
     return () => window.removeEventListener("blur", resetComposeDraft);
   }, []);
 
-  // attemptLaunch resolves the highlighted binding plus the full compose
-  // draft through Launch.Composition. It is the one place this component
-  // calls Launch.* — every field's Enter handler either commits pending
+  // attemptLaunch sends either the highlighted binding or the explicitly
+  // entered bare profile plus the full compose draft through
+  // Launch.Composition. It is the one place this component calls Launch.*
+  // — every field's Enter handler either commits pending
   // text into the draft (skills/parts/sets — see each control below) or,
   // when there is nothing pending to commit, falls through to this
   // function, so "press Enter" always either builds the composition
@@ -197,7 +271,7 @@ export default function Palette() {
   // person did not ask for.
   function attemptLaunch() {
     if (launching) return;
-    const target = activeTarget;
+    const target = bindingless ? baseProfile.trim() : activeTarget?.name;
     if (!target) return;
     setLaunchError("");
     setLaunching(true);
@@ -210,7 +284,7 @@ export default function Palette() {
     // happen, and leave the draft exactly as it was so the person can fix
     // whatever cairn's stderr says and try again without retyping it.
     Launch.Composition({
-      target: target.name,
+      target,
       skills,
       prompts,
       scope: scope.trim(),
@@ -230,6 +304,17 @@ export default function Palette() {
       })
       .catch((err) => setLaunchError(String(err?.message ?? err)))
       .finally(() => setLaunching(false));
+  }
+
+  // This is a NEW draft, per T33: opening it clears any additions that were
+  // being composed over a selected binding. resetComposeDraft still owns
+  // today's dismissal behavior; T30 owns whether that function is called on
+  // blur in the future, so this task does not choose draft persistence.
+  function openBindinglessComposition() {
+    resetComposeDraft();
+    setBindingless(true);
+    setLaunchError("");
+    requestAnimationFrame(() => baseProfileRef.current?.focus());
   }
 
   // addSkills splits raw on commas (--skill's own "comma-separated and
@@ -272,6 +357,15 @@ export default function Palette() {
   }
   function removePart(value) {
     setParts((cur) => cur.filter((p) => p !== value));
+  }
+  function movePart(index, offset) {
+    setParts((cur) => {
+      const nextIndex = index + offset;
+      if (nextIndex < 0 || nextIndex >= cur.length) return cur;
+      const next = [...cur];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
   }
 
   function addSet(slot, value) {
@@ -327,6 +421,19 @@ export default function Palette() {
         onKeyDown={onSearchKeyDown}
       />
 
+      <div className="palette-modebar">
+        <span className="muted">
+          {bindingless ? "One-time composition — nothing will be saved" : "Start from a profile instead of a saved binding"}
+        </span>
+        <button
+          type="button"
+          className={bindingless ? "active" : ""}
+          onClick={openBindinglessComposition}
+        >
+          New one-time composition
+        </button>
+      </div>
+
       {launchError ? (
         <div className="err" style={{ padding: "8px 14px" }}>
           Couldn't launch: {launchError}
@@ -334,11 +441,32 @@ export default function Palette() {
       ) : null}
 
       <div className="palette-scroll">
-        {renderBody(listResult, filtered, activeIndex, setActiveIndex)}
+        {renderBody(
+          listResult,
+          filtered,
+          bindingless ? -1 : activeIndex,
+          (index) => {
+            setBindingless(false);
+            setBaseProfile("");
+            setActiveIndex(index);
+            setLaunchError("");
+          },
+          bindingless ? () => {} : setActiveIndex,
+        )}
 
-        {activeTarget ? (
+        {bindingless || activeTarget ? (
           <ComposeSection
-            targetName={activeTarget.name}
+            bindingless={bindingless}
+            targetName={bindingless ? baseProfile.trim() : activeTarget.name}
+            baseProfile={baseProfile}
+            setBaseProfile={setBaseProfile}
+            baseProfileRef={baseProfileRef}
+            profileSuggestions={profileSuggestions}
+            skillSuggestions={skillSuggestions}
+            promptSuggestions={promptSuggestions}
+            projectSuggestions={projectSuggestions}
+            suggestionErrors={suggestionErrors}
+            launching={launching}
             skills={skills}
             skillDraft={skillDraft}
             setSkillDraft={setSkillDraft}
@@ -356,6 +484,7 @@ export default function Palette() {
             setPartDraft={setPartDraft}
             addPart={addPart}
             removePart={removePart}
+            movePart={movePart}
             sets={sets}
             setSlotDraft={setSlotDraft}
             setSetSlotDraft={setSetSlotDraft}
@@ -388,19 +517,28 @@ export default function Palette() {
   );
 }
 
-// ComposeSection is the compose form itself: one control per Cairn flag
-// (T08, CW-20260903-0012; prompts added by CW-20260904-0006) beyond the
-// target already chosen from the list above — skills to ADD, prompts to
-// ADD, a scope override, repeatable --set slot=value pairs, and repeatable
-// additional --with parts. There is deliberately no
-// template control here — template choice is authoring-time only (D4) and
-// contributes nothing to a composition. Ordering carries no meaning: chips
-// render in insertion order purely because that's the natural order for a
-// list, not because position means anything to Cairn (resolution is
-// deterministic by key) — nothing here lets a person reorder one.
+// ComposeSection is the compose form itself: a bare-profile target when T33
+// mode is active, followed by one control per Cairn flag (T08,
+// CW-20260903-0012; prompts added by CW-20260904-0006). It follows T32's
+// profile -> ordered parts -> additive skills/prompts -> sets -> scope
+// resolution stack. Parts can be reordered because each becomes an ordered
+// --with flag. Skills and prompts stay additive-only; their chip order is
+// insertion order, never an inherited selection. There is deliberately no
+// template control — template choice is authoring-time only (D4) and
+// contributes nothing to a composition.
 function ComposeSection(props) {
   const {
+    bindingless,
     targetName,
+    baseProfile,
+    setBaseProfile,
+    baseProfileRef,
+    profileSuggestions,
+    skillSuggestions,
+    promptSuggestions,
+    projectSuggestions,
+    suggestionErrors,
+    launching,
     skills,
     skillDraft,
     setSkillDraft,
@@ -418,6 +556,7 @@ function ComposeSection(props) {
     setPartDraft,
     addPart,
     removePart,
+    movePart,
     sets,
     setSlotDraft,
     setSetSlotDraft,
@@ -432,7 +571,94 @@ function ComposeSection(props) {
   return (
     <div className="compose-section">
       <div className="compose-heading">
-        Compose additions for <span className="compose-target">{targetName}</span>
+        {bindingless ? "One-time composition" : "Compose additions for"}{" "}
+        <span className="compose-target">{bindingless ? targetName || "a profile" : targetName}</span>
+      </div>
+
+      {bindingless ? (
+        <div className="compose-field compose-base-profile">
+          <label htmlFor="compose-profile-input">
+            Base profile <span className="muted">(suggestions only — free text works)</span>
+          </label>
+          <input
+            id="compose-profile-input"
+            ref={baseProfileRef}
+            list="compose-profile-suggestions"
+            placeholder="profile id"
+            spellCheck={false}
+            value={baseProfile}
+            onChange={(e) => {
+              setBaseProfile(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                attemptLaunch();
+              }
+            }}
+          />
+          <datalist id="compose-profile-suggestions">
+            {profileSuggestions.map((profile) => <option key={profile} value={profile} />)}
+          </datalist>
+        </div>
+      ) : null}
+
+      {/* Additional --with parts. A Cairn profile can also be used as a
+          composable part, so the active bundle's real profile IDs are the
+          useful suggestions here. The input remains free text. */}
+      <div className="compose-field">
+        <label htmlFor="compose-part-input">Additional parts (--with)</label>
+        <input
+          id="compose-part-input"
+          list="compose-part-suggestions"
+          placeholder="a catalog id or path — Enter to add"
+          spellCheck={false}
+          value={partDraft}
+          onChange={(e) => setPartDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Backspace" && partDraft === "" && parts.length > 0) {
+              removePart(parts[parts.length - 1]);
+              return;
+            }
+            onDraftEnter(e, () => {
+              if (partDraft.trim() === "") return false;
+              addPart(partDraft);
+              setPartDraft("");
+              return true;
+            });
+          }}
+        />
+        <datalist id="compose-part-suggestions">
+          {profileSuggestions.map((part) => <option key={part} value={part} />)}
+        </datalist>
+        {parts.length > 0 ? (
+          <div className="compose-chips">
+            {parts.map((p, index) => (
+              <span className="compose-chip" key={p}>
+                {p}
+                <button
+                  type="button"
+                  disabled={index === 0}
+                  onClick={() => movePart(index, -1)}
+                  title={`Move ${p} earlier`}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  disabled={index === parts.length - 1}
+                  onClick={() => movePart(index, 1)}
+                  title={`Move ${p} later`}
+                >
+                  ↓
+                </button>
+                <button type="button" onClick={() => removePart(p)} title={`Remove ${p}`}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {/* Skills: additive-only. The label says "Add", never "Skills" alone
@@ -444,6 +670,7 @@ function ComposeSection(props) {
         </label>
         <input
           id="compose-skill-input"
+          list="compose-skill-suggestions"
           placeholder="skill id, comma-separated — Enter to add"
           spellCheck={false}
           value={skillDraft}
@@ -461,6 +688,9 @@ function ComposeSection(props) {
             });
           }}
         />
+        <datalist id="compose-skill-suggestions">
+          {skillSuggestions.map((skill) => <option key={skill} value={skill} />)}
+        </datalist>
         {skills.length > 0 ? (
           <div className="compose-chips">
             {skills.map((s) => (
@@ -488,6 +718,7 @@ function ComposeSection(props) {
         </label>
         <input
           id="compose-prompt-input"
+          list="compose-prompt-suggestions"
           placeholder="prompt name, comma-separated — Enter to add"
           spellCheck={false}
           value={promptDraft}
@@ -505,6 +736,9 @@ function ComposeSection(props) {
             });
           }}
         />
+        <datalist id="compose-prompt-suggestions">
+          {promptSuggestions.map((prompt) => <option key={prompt} value={prompt} />)}
+        </datalist>
         {prompts.length > 0 ? (
           <div className="compose-chips">
             {prompts.map((p) => (
@@ -519,62 +753,6 @@ function ComposeSection(props) {
         ) : (
           <div className="compose-empty muted">No prompts added — this launch gets only what the profile already declares.</div>
         )}
-      </div>
-
-      {/* Scope override: a plain value, bound directly — nothing to
-          "commit" separately, so its own Enter goes straight to
-          attemptLaunch. */}
-      <div className="compose-field">
-        <label htmlFor="compose-scope-input">Scope override</label>
-        <input
-          id="compose-scope-input"
-          placeholder="(leave empty to use the binding's own scope)"
-          spellCheck={false}
-          value={scope}
-          onChange={(e) => setScope(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              attemptLaunch();
-            }
-          }}
-        />
-      </div>
-
-      {/* Additional --with parts. */}
-      <div className="compose-field">
-        <label htmlFor="compose-part-input">Additional parts (--with)</label>
-        <input
-          id="compose-part-input"
-          placeholder="a catalog id or path — Enter to add"
-          spellCheck={false}
-          value={partDraft}
-          onChange={(e) => setPartDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Backspace" && partDraft === "" && parts.length > 0) {
-              removePart(parts[parts.length - 1]);
-              return;
-            }
-            onDraftEnter(e, () => {
-              if (partDraft.trim() === "") return false;
-              addPart(partDraft);
-              setPartDraft("");
-              return true;
-            });
-          }}
-        />
-        {parts.length > 0 ? (
-          <div className="compose-chips">
-            {parts.map((p) => (
-              <span className="compose-chip" key={p}>
-                {p}
-                <button type="button" onClick={() => removePart(p)} title={`Remove ${p}`}>
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : null}
       </div>
 
       {/* One-off --set slot=value overrides. */}
@@ -627,6 +805,49 @@ function ComposeSection(props) {
           </div>
         ) : null}
       </div>
+
+      {/* Scope maps directly to --scope. Project names never cross the
+          launch boundary: selecting one copies its literal saved path into
+          this ordinary free-text input, exactly like T32's composer. */}
+      <div className="compose-field">
+        <label htmlFor="compose-scope-input">
+          Scope {bindingless ? "" : "override"}<span className="muted"> (literal path)</span>
+        </label>
+        <input
+          id="compose-scope-input"
+          list="compose-project-suggestions"
+          placeholder={bindingless ? "project path (optional)" : "(leave empty to use the binding's own scope)"}
+          spellCheck={false}
+          value={scope}
+          onChange={(e) => setScope(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              attemptLaunch();
+            }
+          }}
+        />
+        <datalist id="compose-project-suggestions">
+          {projectSuggestions.map((project) => (
+            <option key={project.name} value={project.path}>{project.name}</option>
+          ))}
+        </datalist>
+      </div>
+
+      {suggestionErrors.catalog || suggestionErrors.projects ? (
+        <div className="compose-suggestion-error muted">
+          Some suggestions are unavailable. Free text still works.
+          {suggestionErrors.catalog ? <span> Bundle: {suggestionErrors.catalog}</span> : null}
+          {suggestionErrors.projects ? <span> Projects: {suggestionErrors.projects}</span> : null}
+        </div>
+      ) : null}
+
+      <div className="compose-launch-row">
+        <span className="muted">Launch only — this palette never writes a binding.</span>
+        <button type="button" onClick={attemptLaunch} disabled={launching || !targetName}>
+          {launching ? "Launching…" : "Launch composition"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -638,7 +859,7 @@ function ComposeSection(props) {
 // itself rejected. Each non-"ok" state gets its own honest copy, per this
 // task's own acceptance table — none of them collapse into "No bindings
 // yet", which is reserved for the one state where that is actually true.
-function renderBody(listResult, filtered, activeIndex, setActiveIndex) {
+function renderBody(listResult, filtered, activeIndex, onSelect, onHover) {
   if (listResult === null) {
     return <div className="placeholder muted">Loading bindings…</div>;
   }
@@ -701,8 +922,8 @@ function renderBody(listResult, filtered, activeIndex, setActiveIndex) {
             role="option"
             aria-selected={i === activeIndex}
             className={"palette-row" + (i === activeIndex ? " active" : "")}
-            onMouseEnter={() => setActiveIndex(i)}
-            onClick={() => setActiveIndex(i)}
+            onMouseEnter={() => onHover(i)}
+            onClick={() => onSelect(i)}
           >
             <span className="palette-row-name">{b.name}</span>
             <span className="palette-row-profile">{b.profile}</span>

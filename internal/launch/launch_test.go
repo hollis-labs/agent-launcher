@@ -477,6 +477,45 @@ func TestCompositionFromInput_MapsEveryFieldToTheMatchingCairnFlag(t *testing.T)
 	}
 }
 
+// TestCompositionFromInput_BareProfileIsACompleteTarget is T33's narrow
+// backend contract: the palette does not need to resolve or select a binding
+// before launch. A profile id is already a valid Cairn boot target, and the
+// mapping must preserve it as the positional target while carrying every
+// one-time addition exactly as it does for a binding name.
+func TestCompositionFromInput_BareProfileIsACompleteTarget(t *testing.T) {
+	input := CompositionInput{
+		Target:  "engineer",
+		Parts:   []string{"writer", "reviewer"},
+		Skills:  []string{"qstatus"},
+		Prompts: []string{"report"},
+		Sets:    []SetInput{{Slot: "role", Value: "marker"}},
+		Scope:   "/literal/project/path",
+	}
+
+	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root")
+	argv, err := compose.Build(comp)
+	if err != nil {
+		t.Fatalf("compose.Build: %v", err)
+	}
+
+	want := []string{
+		"boot", "engineer",
+		"--profile", "/bundle/root",
+		"--boot-root", "/state/boot/root",
+		"--session", "current",
+		"--with", "writer",
+		"--with", "reviewer",
+		"--skill", "qstatus",
+		"--prompt", "report",
+		"--set", "role=marker",
+		"--scope", "/literal/project/path",
+		"--json",
+	}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("bare-profile argv =\n  %#v\nwant\n  %#v", argv, want)
+	}
+}
+
 // TestCompositionFromInput_EmptyInputProducesTheSameMinimalArgvAsBareLaunch
 // is the additive-only guarantee's other half, stated as an argv-shape
 // fact rather than a UI rule: a CompositionInput with every optional field
@@ -773,7 +812,7 @@ func TestLaunchComposition_RealCairnRendersPartSkillPromptAndSetIntoTheBootDirec
 	// only be blamed on what this test itself just did.
 	beforeStatus := gitStatusShort(t, bundleRoot)
 
-	const addedSkill = "qstatus"  // not in engineer.md's own `skills:` (search-first, surface-discovery)
+	const addedSkill = "qstatus" // not in engineer.md's own `skills:` (search-first, surface-discovery)
 	const addedPrompt = "report" // prompts/report.md in the live bundle, as of 2026-09-03
 	const addedPart = "writer"   // contributes its own skill, "blg", which engineer.md does not declare
 	const partOnlySkill = "blg"  // writer.md's own skills: [blg]
@@ -910,6 +949,138 @@ func TestLaunchComposition_RealCairnRendersPartSkillPromptAndSetIntoTheBootDirec
 	afterStatus := gitStatusShort(t, bundleRoot)
 	if beforeStatus != afterStatus {
 		t.Fatalf("git status --short on %s changed during this test:\nbefore: %q\nafter:  %q\n(this test must only ever read that bundle)", bundleRoot, beforeStatus, afterStatus)
+	}
+}
+
+// TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition is
+// T33's end-to-end distinction from the binding-based test above. Target is
+// the bare profile id "engineer" -- no binding selection or resolution --
+// while an ordered part, an explicitly added skill, a prompt, a set override
+// and a literal scope all travel through the real Cairn binary. The test also
+// proves the live catalog has no binding named "engineer", so a successful
+// run cannot accidentally be exercising the old selected-binding path.
+// Reading the planted files back proves this is a rendered composition rather
+// than only an argv-shape assertion. The real bundle remains read-only; Cairn
+// writes exclusively beneath scratchRoot.
+func TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition(t *testing.T) {
+	cairnPath, err := exec.LookPath("cairn")
+	if err != nil {
+		t.Skipf("cairn not on PATH, skipping bare-profile integration check: %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory on this machine: %v", err)
+	}
+	bundleRoot := filepath.Join(home, "dev", "projects", "agent-setup")
+	if info, statErr := os.Stat(bundleRoot); errors.Is(statErr, os.ErrNotExist) {
+		t.Skipf("no bundle at %s, skipping bare-profile integration check", bundleRoot)
+	} else if statErr != nil || !info.IsDir() {
+		t.Fatalf("bundle root %s is present but unreadable or not a directory: %v", bundleRoot, statErr)
+	}
+
+	const (
+		target        = "engineer"
+		addedPart     = "writer"
+		partOnlySkill = "blg"
+		addedSkill    = "qstatus"
+		prompt        = "report"
+		setSlot       = "role"
+		setMarker     = "TACHYON_T33_BARE_PROFILE_MARKER_4d8f2a"
+	)
+	for _, required := range []string{
+		filepath.Join(bundleRoot, "profiles", target+".md"),
+		filepath.Join(bundleRoot, "profiles", addedPart+".md"),
+		filepath.Join(bundleRoot, "prompts", prompt+".md"),
+		filepath.Join(home, ".config", "agents", "skills", addedSkill, "SKILL.md"),
+		filepath.Join(home, ".config", "agents", "skills", partOnlySkill, "SKILL.md"),
+	} {
+		if _, statErr := os.Stat(required); statErr != nil {
+			t.Fatalf("required live-bundle fixture %s is unavailable: %v", required, statErr)
+		}
+	}
+	if unexpected, getErr := binding.Open(bundleRoot).Get(target); getErr == nil {
+		t.Fatalf("live bundle unexpectedly has a binding named %q (%+v); this test would no longer prove a bare-profile launch", target, unexpected)
+	} else if !errors.Is(getErr, binding.ErrNotFound) {
+		t.Fatalf("checking that %q is not a saved binding: %v", target, getErr)
+	}
+
+	beforeStatus := gitStatusShort(t, bundleRoot)
+	scratchRoot := t.TempDir()
+	literalScope := t.TempDir()
+	input := CompositionInput{
+		Target:  target,
+		Parts:   []string{addedPart},
+		Skills:  []string{addedSkill},
+		Prompts: []string{prompt},
+		Sets:    []SetInput{{Slot: setSlot, Value: setMarker}},
+		Scope:   literalScope,
+	}
+	comp := compositionFromInput(input, bundleRoot, scratchRoot)
+
+	rec := &spawnRecorder{}
+	if err := runComposition(context.Background(), comp, scratchRoot, boot.ExecRunner(cairnPath), rec.spawn); err != nil {
+		t.Fatalf("runComposition with bare profile %q: %v", target, err)
+	}
+	if !rec.called {
+		t.Fatal("spawn was not reached after the real bare-profile Cairn invocation")
+	}
+	bootDir := rec.cwd
+	if info, statErr := os.Stat(bootDir); statErr != nil || !info.IsDir() {
+		t.Fatalf("reported boot dir %q does not exist or is not a directory: %v", bootDir, statErr)
+	}
+
+	// Direct skill addition: engineer does not declare qstatus itself.
+	addedSkillPath := filepath.Join(bootDir, ".claude", "skills", addedSkill, "SKILL.md")
+	addedSkillBytes, err := os.ReadFile(addedSkillPath)
+	if err != nil {
+		t.Fatalf("added skill %q was not rendered at %s: %v", addedSkill, addedSkillPath, err)
+	}
+	if len(addedSkillBytes) == 0 {
+		t.Errorf("added skill file %s is empty", addedSkillPath)
+	}
+
+	// Part contribution: writer contributes blg, which engineer does not.
+	partSkillPath := filepath.Join(bootDir, ".claude", "skills", partOnlySkill, "SKILL.md")
+	if _, err := os.Stat(partSkillPath); err != nil {
+		t.Errorf("--with %s did not render its own skill %q at %s: %v", addedPart, partOnlySkill, partSkillPath, err)
+	}
+
+	// Prompt delivery is checked here under the bare target. report is also a
+	// base-profile prompt in today's bundle, while the pure mapping test above
+	// is what proves T33's explicit prompt control emits --prompt.
+	promptPath := filepath.Join(bootDir, ".claude", "commands", "boot", prompt+".md")
+	promptBytes, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("prompt %q was not planted at %s: %v", prompt, promptPath, err)
+	}
+	if !strings.Contains(string(promptBytes), "binding: "+target) {
+		t.Errorf("planted prompt %s does not carry bare target %q", promptPath, target)
+	}
+
+	// Set and scope both reached Cairn's rendered instance values.
+	agentsPath := filepath.Join(bootDir, "AGENTS.md")
+	agentsBytes, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("reading rendered %s: %v", agentsPath, err)
+	}
+	if !strings.Contains(string(agentsBytes), setMarker) {
+		t.Errorf("rendered %s does not contain --set marker %q", agentsPath, setMarker)
+	}
+	// macOS resolves /var through its /private/var symlink while Cairn
+	// canonicalizes scope. The argv test above proves Tachyon forwards the
+	// literal unchanged; this assertion follows Cairn's rendered form.
+	renderedScope, err := filepath.EvalSymlinks(literalScope)
+	if err != nil {
+		t.Fatalf("resolving scratch scope %s: %v", literalScope, err)
+	}
+	if !strings.Contains(string(promptBytes), "scope: "+renderedScope) {
+		t.Errorf("planted prompt %s does not contain rendered scope %q", promptPath, renderedScope)
+	}
+
+	afterStatus := gitStatusShort(t, bundleRoot)
+	if beforeStatus != afterStatus {
+		t.Fatalf("git status --short on %s changed during bare-profile test:\nbefore: %q\nafter:  %q", bundleRoot, beforeStatus, afterStatus)
 	}
 }
 

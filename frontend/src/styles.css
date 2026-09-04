@@ -50,6 +50,26 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   outline: none;
 }
 .palette-shell input:focus { border-color: var(--accent); }
+.palette-modebar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 7px 0 1px;
+  font-size: 11px;
+}
+.palette-modebar button {
+  flex-shrink: 0;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+.palette-modebar button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #172521;
+}
 
 /* palette-scroll wraps the list AND the compose form (CW-20260903-0017) in
    one scrolling region between the search input and the footer, so the two
@@ -149,6 +169,10 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
 }
 .compose-target { color: var(--accent); font-style: normal; }
 .compose-field { display: flex; flex-direction: column; gap: 5px; }
+.compose-base-profile {
+  padding-left: 10px;
+  border-left: 2px solid var(--accent);
+}
 .compose-field label {
   font-size: 11px;
   color: var(--muted);
@@ -199,6 +223,40 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   cursor: pointer;
 }
 .compose-chip button:hover { color: #e06c75; }
+.compose-chip button:disabled { opacity: 0.3; cursor: default; }
+.compose-chip button:disabled:hover { color: var(--muted); }
+.compose-suggestion-error {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 9px;
+  border-left: 2px solid #d8a657;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.compose-launch-row {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0 2px;
+  background: rgba(16, 17, 21, 0.96);
+  font-size: 10.5px;
+}
+.compose-launch-row button {
+  flex-shrink: 0;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.compose-launch-row button:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: default;
+}
 
 .manager-shell { height: 100%; display: flex; flex-direction: column; }
 .manager-shell header {
