@@ -1,6 +1,6 @@
 // Package skeleton renders a starting file for a brand-new bundle artifact —
-// a role profile, a template, a piece of role prose, a skill, or a
-// binding — and writes it into the bundle so
+// a role profile, a reusable part profile, a template, a piece of role
+// prose, a skill, or a binding — and writes it into the bundle so
 // [github.com/hollis-labs/tachyon/internal/bundle]'s
 // next read finds it and [github.com/hollis-labs/tachyon/internal/manager]'s
 // tree shows it, with no restart and no cache to invalidate (bundle.Bundle
@@ -17,7 +17,9 @@
 // unconditionally from that point forward. This package's tests prove that
 // handoff by round-tripping a freshly created file through
 // internal/manager's real Open/Save path, not merely through this package's
-// own New, per CW-20260903-0010's last acceptance criterion.
+// own New, per CW-20260903-0010's last acceptance criterion. [NewPart] is
+// the placement-specific entry point for the same handoff under
+// profiles/parts; it still returns an ordinary profile ref.
 //
 // # Nothing here validates content (D8)
 //

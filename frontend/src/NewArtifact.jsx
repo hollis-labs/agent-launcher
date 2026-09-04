@@ -2,19 +2,19 @@ import { useEffect, useState } from "react";
 import { Manager as ManagerAPI } from "./bridge.js";
 
 // The "new artifact" entry point: CW-20260903-0010. A self-contained panel,
-// deliberately its own file rather than folded into Manager.jsx (T05's),
-// since T07 (CW-20260903-0011, bindings) runs concurrently in a sibling
-// worktree and may also touch shell/frontend wiring — keeping this isolated
-// minimizes the chance of the two colliding on the same lines.
+// deliberately its own file rather than folded into Manager.jsx so creation
+// state remains independent from the tree/editor state that renders it.
 //
 // KIND_META here is a small, deliberately duplicated subset of
 // Manager.jsx's own KIND_META (profile/role-prose/template/prompt/skill/
 // binding only — this form never offers "hook", which is out of this
 // task's scope). Importing Manager.jsx's copy would create a circular
-// module dependency (Manager.jsx renders this component), so six lines of
-// label/color are repeated here instead.
+// module dependency (Manager.jsx renders this component), so the small
+// label/color table is repeated here instead. "part" is a creation intent,
+// not a bundle kind; NewPart returns ordinary profile content.
 const KIND_META = {
   profile: { label: "Profile", color: "#45c7b8" },
+  part: { label: "Part", color: "#45c7b8" },
   "role-prose": { label: "Role prose", color: "#c78ee0" },
   template: { label: "Template", color: "#e0b04b" },
   prompt: { label: "Prompt", color: "#e0708a" },
@@ -22,10 +22,10 @@ const KIND_META = {
   binding: { label: "Binding", color: "#8fce7a" },
 };
 
-// KIND_ORDER is every kind this form could ever offer, in the order buttons
-// render. "binding" is always listed — see the disabled-button note below —
-// even though NewArtifactKinds() never includes it today.
-const KIND_ORDER = ["profile", "role-prose", "template", "prompt", "skill", "binding"];
+// CREATION_ORDER is every creation intent this form offers. "part" sits next
+// to "profile", but support for it is derived from profile support rather
+// than adding a synthetic value to bundle.Kind or NewArtifactKinds().
+const CREATION_ORDER = ["profile", "part", "role-prose", "template", "prompt", "skill", "binding"];
 
 // ID_PATTERN mirrors internal/skeleton's idPattern exactly, for immediate
 // feedback. The server is the actual authority — this is UX only, and a
@@ -44,6 +44,7 @@ const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 // put one in.
 const FIELD_SHAPE = {
   profile: { name: true, description: true },
+  part: { name: false, description: false },
   "role-prose": { name: true, description: false },
   template: { name: false, description: false },
   prompt: { name: true, description: false },
@@ -69,7 +70,7 @@ export default function NewArtifact({ onCreated, onCancel }) {
       .catch((e) => setError(String(e?.message ?? e)));
   }, []);
 
-  const isSupported = (k) => Array.isArray(supported) && supported.includes(k);
+  const isSupported = (k) => Array.isArray(supported) && supported.includes(k === "part" ? "profile" : k);
   const idValid = ID_PATTERN.test(id);
   const canCreate = kind != null && isSupported(kind) && idValid && !creating;
   const shape = kind ? (FIELD_SHAPE[kind] ?? {}) : {};
@@ -78,7 +79,10 @@ export default function NewArtifact({ onCreated, onCancel }) {
     if (!canCreate) return;
     setCreating(true);
     setError(null);
-    ManagerAPI.NewArtifact(kind, id.trim(), name.trim(), description.trim())
+    const request = kind === "part"
+      ? ManagerAPI.NewPart(id.trim())
+      : ManagerAPI.NewArtifact(kind, id.trim(), name.trim(), description.trim());
+    request
       .then((content) => {
         onCreated?.(content);
       })
@@ -96,20 +100,14 @@ export default function NewArtifact({ onCreated, onCancel }) {
       </div>
 
       <div className="new-artifact-kinds">
-        {KIND_ORDER.map((k) => {
+        {CREATION_ORDER.map((k) => {
           const meta = KIND_META[k];
           const enabled = supported == null ? false : isSupported(k);
           const title = enabled
             ? meta.label
             : supported == null
               ? "Loading…"
-              : // The binding row is the deliberate seam this task leaves
-                // open: internal/skeleton's registry has no scaffold for it
-                // yet (see that package's doc), so NewArtifactKinds() never
-                // reports it as supported, and this button stays disabled
-                // until it does -- no frontend change will be needed when
-                // that lands.
-                "Not yet — depends on CW-20260903-0011 (the bindings interface)";
+              : "Creation is not available for this artifact type";
           return (
             <button
               key={k}

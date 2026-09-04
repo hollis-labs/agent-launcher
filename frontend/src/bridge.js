@@ -92,6 +92,9 @@ export const Manager = {
   NewArtifactKinds: () => callService(MANAGER_SERVICE, "NewArtifactKinds"),
   NewArtifact: (kind, id, name, description) =>
     callService(MANAGER_SERVICE, "NewArtifact", kind, id, name, description),
+  // A part is a profile-placement intent, not another artifact kind. The
+  // returned content still has kind === "profile" and a bare id.
+  NewPart: (id) => callService(MANAGER_SERVICE, "NewPart", id),
 };
 
 // Binding is internal/binding.Service: the bundle's bindings/ directory
