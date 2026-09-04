@@ -76,19 +76,101 @@ Stated so nobody designs around a promise that is not there.
 
 ## Status
 
-The manager and the launch path both work. Tachyon reads the agent-setup
-bundle, shows it as a tree, and edits it as text byte-for-byte. Summoning the
-palette and picking a saved binding launches it through Cairn into an iTerm2
-session, in a stable boot directory that is moved aside rather than deleted on
-relaunch.
+The manager, composition, preview and launch paths work. Tachyon reads the
+active bundle, including ordinary profiles in both `profiles/` and
+`profiles/parts/`, shows it as a tree, and edits it as text byte-for-byte. The
+manager can create bundle artifacts, edit bindings, inspect Cairn's effective
+skills preview, manage project scopes, apply the active bundle and run the
+guarded old-boot-directory sweep on demand.
+
+Summoning the palette can launch either a saved binding or an unsaved
+composition through Cairn into an iTerm2 session. Composition drafts survive
+ordinary palette dismissal until they are launched or explicitly discarded.
+Boot directories have stable current paths; a relaunch moves the old directory
+aside, and the guarded startup/manual sweep removes only eligible `.prev-*`
+directories that are no longer in use.
 
 The Swift menubar app, the Go sidecar behind it, its bundled catalog corpus,
 the frozen `list`/`describe`/`launch` contract and the `go-agent-launch`
 dependency are all gone.
 
-Not built yet: the compose form and saving a composition as a binding (both
-waiting on Cairn's `--with`/`--set`/`--skill`), and the guarded sweep of the
-`.prev-*` directories relaunch leaves behind.
+## Run and build
+
+Requirements are Go 1.26.3 or newer, Node.js/npm, the macOS command-line
+developer tools and Cairn on `PATH`. iTerm2 is required when a selection is
+actually launched. For source development:
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run build
+go run .
+```
+
+`go run .` is useful for development, but it is not a packaged-app or macOS
+privacy test: a terminal-launched process can inherit the terminal's
+Accessibility grant.
+
+Build the production macOS application with the repository's single packaging
+command:
+
+```sh
+./scripts/build-macos.sh
+```
+
+It rebuilds the frontend, verifies that every hashed asset referenced by
+`frontend/dist/index.html` exists and is tracked, builds the Wails production
+binary, installs the checked-in icon and `Info.plist`, and signs the result at
+the stable path `build/bin/Tachyon.app`. A changed frontend must therefore have
+its newly generated `frontend/dist` files committed before it can be packaged.
+The ordinary Go build remains npm-independent because `frontend/dist` is
+committed:
+
+```sh
+go test ./...
+go build ./...
+npm --prefix frontend test
+```
+
+### Local signing and Accessibility identity
+
+The first packaged build creates a Tachyon-only self-signed code-signing
+identity in `~/Library/Application Support/Tachyon/signing/`. It uses a
+dedicated keychain, records user-scoped code-signing trust, and restricts the
+private key's noninteractive access to Apple's signing tools. No administrator
+access, Apple developer account or repository-stored private key is required.
+Signer creation is staged and published atomically; later builds repair a
+missing trust record for that same certificate without replacing it. The
+packaging command is serialized across worktrees so concurrent builds cannot
+race the signing state or final app replacement.
+
+The resulting designated requirement pins both
+`com.hollislabs.tachyon` and the persistent certificate. The build prints that
+requirement and refuses to replace an existing app if it changes across a
+rebuild. Back up the signing directory: deleting or partially recreating it
+rotates Tachyon's identity and requires granting Accessibility again. The app
+is locally signed for this machine; it is not notarized or suitable for
+distribution to another Mac.
+
+Launch the package through LaunchServices, not by executing its inner binary:
+
+```sh
+open build/bin/Tachyon.app
+```
+
+For the required macOS verification, enable `Tachyon.app` once in **System
+Settings → Privacy & Security → Accessibility**, launch it with the command
+above, and observe all of the following:
+
+1. The configured global hotkey (default `Cmd+Shift+T`) summons the palette.
+2. The Tachyon tray icon renders; left-click toggles the palette, and
+   right-click shows Open Manager, Settings and Quit.
+3. After quitting, rerun `./scripts/build-macos.sh` and launch the same app path
+   with `open`; Accessibility remains enabled without adding the app again, and
+   the hotkey and tray still work.
+
+Those observations must be made by a person against the packaged application;
+successful signing, `go run .`, or automated process inspection does not prove
+them.
 
 ### Where the authority is
 
