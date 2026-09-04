@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { BindingComposer as ComposerAPI, Shell } from "./bridge.js";
 import { acceptTopSuggestion } from "./autocomplete.js";
+import EffectiveSkills from "./EffectiveSkills.jsx";
 
 function AdditiveField({ label, hint, values, setValues, suggestions }) {
   const [draft, setDraft] = useState("");
@@ -82,6 +83,7 @@ export default function BindingComposer({ tree, projects, projectError, onSaved 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(null);
   const input = { name: name.trim(), profile: profile.trim(), parts, skills, prompts, sets, scope: scope.trim() };
+  const previewInput = { target: profile.trim(), parts, skills, prompts, sets, scope: scope.trim() };
 
   const run = (action) => {
     if (!profile.trim() || (action !== "Launch" && !name.trim())) return;
@@ -119,7 +121,10 @@ export default function BindingComposer({ tree, projects, projectError, onSaved 
         <datalist id="composer-profiles">{profiles.map((v) => <option key={v} value={v} />)}</datalist>
       </div>
       <AdditiveField label="Parts" hint="ordered · --with" values={parts} setValues={setParts} suggestions={profiles} />
-      <AdditiveField label="Skills" hint="additive only" values={skills} setValues={setSkills} suggestions={groups.skill ?? []} />
+      <div className="effective-skills-pair">
+        <AdditiveField label="Skills" hint="additive only" values={skills} setValues={setSkills} suggestions={groups.skill ?? []} />
+        <EffectiveSkills input={previewInput} />
+      </div>
       <AdditiveField label="Prompts" hint="additive only" values={prompts} setValues={setPrompts} suggestions={groups.prompt ?? []} />
       <SetsField values={sets} setValues={setSets} />
       <div className="binding-composer-field">

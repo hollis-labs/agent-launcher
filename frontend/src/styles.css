@@ -358,6 +358,68 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   font-size: 10.5px;
   line-height: 1.45;
 }
+
+/* Cairn's resolved list sits beside the additive picker on both surfaces.
+   It is intentionally visually quieter and has no interactive controls. */
+.effective-skills-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 0.9fr);
+  align-items: stretch;
+  gap: 10px;
+}
+.effective-skills-picker {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.effective-skills {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11141a;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.effective-skills-heading {
+  margin-bottom: 7px;
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+.effective-skills-heading span {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 400;
+}
+.effective-skills-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.effective-skills-values code {
+  padding: 2px 5px;
+  border: 1px solid #303640;
+  border-radius: 4px;
+  color: #b9c4cb;
+  background: #181c22;
+  font: 10.5px ui-monospace, monospace;
+}
+.effective-skills-empty,
+.effective-skills-error,
+.effective-skills-advisory {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.effective-skills-advisory {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid #4b4025;
+}
 .manager-shell { height: 100%; display: flex; flex-direction: column; }
 .manager-shell header {
   display: flex;
@@ -716,6 +778,12 @@ button:hover { border-color: var(--accent); }
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+.binding-composer-stack > .effective-skills-pair > .binding-composer-field {
+  min-width: 0;
+}
+.binding-composer-stack > .effective-skills-pair > .effective-skills {
+  margin: 13px 0;
 }
 .binding-composer-field label { color: var(--fg); font-size: 12px; font-weight: 600; }
 .binding-composer-field label span { margin-left: 6px; color: var(--muted); font-size: 10px; font-weight: 400; }

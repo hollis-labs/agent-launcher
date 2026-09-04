@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Binding, Launch, Manager, Project, Shell } from "./bridge.js";
 import { acceptTopSuggestion } from "./autocomplete.js";
+import EffectiveSkills from "./EffectiveSkills.jsx";
 import {
   compositionDraftReducer,
   compositionInput,
@@ -495,6 +496,7 @@ export default function Palette() {
           suggestionErrors={suggestionErrors}
           launchError={launchError}
           launching={launching}
+          previewInput={compositionInput(composition)}
           skills={skills}
           skillDraft={skillDraft}
           setSkillDraft={setSkillDraft}
@@ -572,6 +574,7 @@ function ComposeSection(props) {
     suggestionErrors,
     launchError,
     launching,
+    previewInput,
     skills,
     skillDraft,
     setSkillDraft,
@@ -756,44 +759,49 @@ function ComposeSection(props) {
         <label htmlFor="compose-skill-input">
           Add skills for this launch <span className="muted">(on top of the profile's own — nothing here can remove one)</span>
         </label>
-        <input
-          id="compose-skill-input"
-          list="compose-skill-suggestions"
-          placeholder="skill id, comma-separated — Enter to add"
-          spellCheck={false}
-          value={skillDraft}
-          onChange={(e) => setSkillDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (acceptTopSuggestion(e, skillDraft, skillSuggestions, setSkillDraft)) return;
-            if (e.key === "Backspace" && skillDraft === "" && skills.length > 0) {
-              removeSkill(skills[skills.length - 1]);
-              return;
-            }
-            onDraftEnter(e, () => {
-              if (skillDraft.trim() === "") return false;
-              addSkills(skillDraft);
-              setSkillDraft("");
-              return true;
-            });
-          }}
-        />
-        <datalist id="compose-skill-suggestions">
-          {skillSuggestions.map((skill) => <option key={skill} value={skill} />)}
-        </datalist>
-        {skills.length > 0 ? (
-          <div className="compose-chips">
-            {skills.map((s) => (
-              <span className="compose-chip" key={s}>
-                {s}
-                <button type="button" onClick={() => removeSkill(s)} title={`Remove ${s}`}>
-                  ×
-                </button>
-              </span>
-            ))}
+        <div className="effective-skills-pair">
+          <div className="effective-skills-picker">
+            <input
+              id="compose-skill-input"
+              list="compose-skill-suggestions"
+              placeholder="skill id, comma-separated — Enter to add"
+              spellCheck={false}
+              value={skillDraft}
+              onChange={(e) => setSkillDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (acceptTopSuggestion(e, skillDraft, skillSuggestions, setSkillDraft)) return;
+                if (e.key === "Backspace" && skillDraft === "" && skills.length > 0) {
+                  removeSkill(skills[skills.length - 1]);
+                  return;
+                }
+                onDraftEnter(e, () => {
+                  if (skillDraft.trim() === "") return false;
+                  addSkills(skillDraft);
+                  setSkillDraft("");
+                  return true;
+                });
+              }}
+            />
+            <datalist id="compose-skill-suggestions">
+              {skillSuggestions.map((skill) => <option key={skill} value={skill} />)}
+            </datalist>
+            {skills.length > 0 ? (
+              <div className="compose-chips">
+                {skills.map((s) => (
+                  <span className="compose-chip" key={s}>
+                    {s}
+                    <button type="button" onClick={() => removeSkill(s)} title={`Remove ${s}`}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="compose-empty muted">No skills added — this launch gets only what the profile already resolves to.</div>
+            )}
           </div>
-        ) : (
-          <div className="compose-empty muted">No skills added — this launch gets only what the profile already resolves to.</div>
-        )}
+          <EffectiveSkills input={previewInput} />
+        </div>
       </div>
 
       {/* Prompts: additive-only, the exact mirror of the skills field above

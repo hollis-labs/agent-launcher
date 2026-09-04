@@ -9,6 +9,7 @@ const MANAGER_SERVICE = "github.com/hollis-labs/tachyon/internal/manager.Service
 const BINDING_SERVICE = "github.com/hollis-labs/tachyon/internal/binding.Service";
 const LAUNCH_SERVICE = "github.com/hollis-labs/tachyon/internal/launch.Service";
 const BINDING_COMPOSER_SERVICE = "github.com/hollis-labs/tachyon/internal/bindingcomposer.Service";
+const COMPOSITION_PREVIEW_SERVICE = "github.com/hollis-labs/tachyon/internal/preview.Service";
 const APPLY_SERVICE = "github.com/hollis-labs/tachyon/internal/apply.Service";
 const PROJECT_SERVICE = "github.com/hollis-labs/tachyon/internal/project.Service";
 
@@ -149,6 +150,13 @@ export const BindingComposer = {
   Save: (input) => callService(BINDING_COMPOSER_SERVICE, "Save", input),
   Launch: (input) => callService(BINDING_COMPOSER_SERVICE, "Launch", input),
   SaveAndLaunch: (input) => callService(BINDING_COMPOSER_SERVICE, "SaveAndLaunch", input),
+};
+
+// The raw Wails promise is intentionally returned unchanged. Wails adds a
+// cancel() method that cancels the context accepted by preview.Service;
+// wrapping this call in an async function would discard that capability.
+export const CompositionPreview = {
+  Preview: (input) => callService(COMPOSITION_PREVIEW_SERVICE, "Preview", input),
 };
 
 // Apply is internal/apply.Service: the manager's Apply action

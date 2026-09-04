@@ -72,35 +72,26 @@ var (
 	ErrNoBootRoot = errors.New("compose: boot root is required")
 )
 
-// Build renders c as the argv for `cairn boot`, in the fixed order:
+// Arguments renders the portion of a Cairn composition invocation shared by
+// `cairn boot` and `cairn show`:
 //
-//	boot <target> --profile <bundle> --boot-root <root> --session current
-//	     [--with <part>]... [--skill <a,b,c>] [--prompt <a,b,c>]
-//	     [--set <slot>=<value>]... [--scope <path>] --json
+//	<target> --profile <bundle> [--with <part>]...
+//	  [--skill <a,b,c>] [--prompt <a,b,c>]
+//	  [--set <slot>=<value>]... [--scope <path>]
 //
-// It does not include the program name ("cairn") itself — only the
-// arguments a caller passes to whatever runs that binary, which is a
-// different package's concern (T10).
-//
-// Build returns an error, and no argv, rather than produce an invocation
-// missing Target, Bundle or BootRoot. Every other field is optional and
-// simply omitted from argv when empty or nil.
-func Build(c Composition) ([]string, error) {
+// This is the one canonical encoder for composition options. Callers add only
+// their subcommand-specific flags around it: Build adds boot-root/session and
+// both callers add --json. BootRoot is intentionally not validated here,
+// because `show` must never receive it.
+func Arguments(c Composition) ([]string, error) {
 	switch {
 	case c.Target == "":
 		return nil, ErrNoTarget
 	case c.Bundle == "":
 		return nil, ErrNoBundle
-	case c.BootRoot == "":
-		return nil, ErrNoBootRoot
 	}
 
-	args := []string{
-		"boot", c.Target,
-		"--profile", c.Bundle,
-		"--boot-root", c.BootRoot,
-		"--session", "current",
-	}
+	args := []string{c.Target, "--profile", c.Bundle}
 
 	for _, part := range c.Parts {
 		args = append(args, "--with", part)
@@ -122,6 +113,38 @@ func Build(c Composition) ([]string, error) {
 		args = append(args, "--scope", c.Scope)
 	}
 
+	return args, nil
+}
+
+// Build renders c as the argv for `cairn boot`, in the fixed order:
+//
+//	boot <target> --profile <bundle> --boot-root <root> --session current
+//	     [--with <part>]... [--skill <a,b,c>] [--prompt <a,b,c>]
+//	     [--set <slot>=<value>]... [--scope <path>] --json
+//
+// It does not include the program name ("cairn") itself — only the
+// arguments a caller passes to whatever runs that binary, which is a
+// different package's concern (T10).
+//
+// Build returns an error, and no argv, rather than produce an invocation
+// missing Target, Bundle or BootRoot. Every other field is optional and
+// simply omitted from argv when empty or nil.
+func Build(c Composition) ([]string, error) {
+	common, err := Arguments(c)
+	if err != nil {
+		return nil, err
+	}
+	if c.BootRoot == "" {
+		return nil, ErrNoBootRoot
+	}
+
+	args := []string{
+		"boot", common[0],
+		common[1], common[2],
+		"--boot-root", c.BootRoot,
+		"--session", "current",
+	}
+	args = append(args, common[3:]...)
 	args = append(args, "--json")
 
 	return args, nil
