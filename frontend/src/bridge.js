@@ -10,7 +10,6 @@ const BINDING_SERVICE = "github.com/hollis-labs/tachyon/internal/binding.Service
 const LAUNCH_SERVICE = "github.com/hollis-labs/tachyon/internal/launch.Service";
 const BINDING_COMPOSER_SERVICE = "github.com/hollis-labs/tachyon/internal/bindingcomposer.Service";
 const COMPOSITION_PREVIEW_SERVICE = "github.com/hollis-labs/tachyon/internal/preview.Service";
-const APPLY_SERVICE = "github.com/hollis-labs/tachyon/internal/apply.Service";
 const PROJECT_SERVICE = "github.com/hollis-labs/tachyon/internal/project.Service";
 
 function callService(service, method, ...args) {
@@ -157,33 +156,4 @@ export const BindingComposer = {
 // wrapping this call in an async function would discard that capability.
 export const CompositionPreview = {
   Preview: (input) => callService(COMPOSITION_PREVIEW_SERVICE, "Preview", input),
-};
-
-// Apply is internal/apply.Service: the manager's Apply action
-// (CW-20260904-0023) -- staging the active bundle's templates/, skills/
-// and prompts/ into AGENTS_HOME by running `make install-system` in the
-// bundle root. Never a hand-rolled reimplementation of that target's own
-// rsyncs, and never called anywhere but the explicit, user-clicked Apply
-// button behind its confirmation dialog (see ApplyBar in Manager.jsx).
-//
-// Status() resolves to a Summary: { bundleRoot, agentsHome, kinds, differs,
-// description }. kinds is always exactly three entries — one each for
-// "templates", "skills", "prompts", in that order, even when a kind's own
-// diff is empty — { kind, added, removed, changed } (relpath arrays,
-// content-compared, not filename-only). differs is the Apply button's own
-// enablement gate: true only when the bundle and AGENTS_HOME genuinely
-// differ, never merely "something was edited" (an edit reverted to its
-// original content reads as differs:false again). description is a short
-// human summary, e.g. "3 prompts, 1 template", empty when differs is
-// false. removed is what the confirmation dialog's deletion disclosure is
-// built from — install-system's own rsync --delete would remove exactly
-// those paths from AGENTS_HOME.
-//
-// Apply() actually runs `make install-system` and resolves to a Result:
-// { bundleRoot, agentsHome, stdout, stderr }. A non-zero exit from make —
-// including a missing install-system target — rejects the promise with
-// make's own output in the message, never a generic failure.
-export const Apply = {
-  Status: () => callService(APPLY_SERVICE, "Status"),
-  Apply: () => callService(APPLY_SERVICE, "Apply"),
 };

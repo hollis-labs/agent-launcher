@@ -168,6 +168,64 @@ func TestNewCreatesProfile(t *testing.T) {
 	}
 }
 
+// TestGeneratedScaffoldsUseOnlyTheBundleRoot guards every artifact scaffold
+// against reintroducing the retired installed-content layer. An ordinary
+// profile's role example must resolve inside the active Cairn bundle, and no
+// generated artifact (including a part) may point at ~/.config/agents.
+func TestGeneratedScaffoldsUseOnlyTheBundleRoot(t *testing.T) {
+	for _, kind := range skeleton.SupportedKinds() {
+		kind := kind
+		t.Run(string(kind), func(t *testing.T) {
+			root := tempRoot(t)
+			if _, err := skeleton.New(root, skeleton.Spec{Kind: kind, ID: "bundle-root-audit"}); err != nil {
+				t.Fatalf("New(%s): %v", kind, err)
+			}
+			assertGeneratedTreeUsesBundleRoot(t, root, kind == bundle.KindProfile)
+		})
+	}
+
+	t.Run("part", func(t *testing.T) {
+		root := tempRoot(t)
+		if _, err := skeleton.NewPart(root, "bundle-root-audit"); err != nil {
+			t.Fatalf("NewPart: %v", err)
+		}
+		assertGeneratedTreeUsesBundleRoot(t, root, false)
+	})
+}
+
+func assertGeneratedTreeUsesBundleRoot(t *testing.T, root string, wantRolePath bool) {
+	t.Helper()
+	var all strings.Builder
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		all.Write(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("reading generated scaffold tree: %v", err)
+	}
+
+	content := all.String()
+	if strings.Contains(content, "~/.config/agents") {
+		t.Fatalf("generated scaffold points at the retired installed-content root:\n%s", content)
+	}
+	if wantRolePath {
+		want := "$CAIRN_PROFILE_ROOT/templates/roles/bundle-root-audit.md"
+		if !strings.Contains(content, want) {
+			t.Fatalf("generated profile does not point its role example inside the active bundle; want %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestNewProfileDefaultNameIsTitleCased(t *testing.T) {
 	root := tempRoot(t)
 	if _, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindProfile, ID: "search-first"}); err != nil {

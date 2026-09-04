@@ -70,7 +70,7 @@ func profileScaffold(spec Spec) []byte {
 	b.WriteString("#   slots:\n")
 	b.WriteString("#     - name: role\n")
 	b.WriteString(fmt.Sprintf(
-		"#       source: { kind: static_file, static_file: { path: ~/.config/agents/templates/roles/%s.md } }\n",
+		"#       source: { kind: static_file, static_file: { path: $CAIRN_PROFILE_ROOT/templates/roles/%s.md } }\n",
 		spec.ID))
 	b.WriteString("#   skills: [skill-one, skill-two]\n")
 	b.WriteString("---\n")

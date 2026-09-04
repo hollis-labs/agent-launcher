@@ -473,19 +473,6 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
 .manager-shell main { flex: 1; overflow: auto; padding: 20px; min-height: 0; }
 .manager-shell main.no-pad { padding: 0; overflow: hidden; display: flex; }
 
-/* Wraps ApplyBar and BundleRootBar together at the header's right edge
-   (CW-20260904-0023) -- one margin-left:auto here, rather than on each of
-   them separately, since either one alone previously owned that job
-   (BundleRootBar, before this task) and only one flex child in a row
-   should. */
-.header-status-group {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-left: auto;
-  min-width: 0;
-}
-
 /* Persistently visible in every tab (CW-20260904-0019) -- the active
    bundle root, and how to change it. */
 .bundle-root-bar {
@@ -494,6 +481,7 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   gap: 8px;
   min-width: 0;
   font-size: 11px;
+  margin-left: auto;
 }
 .bundle-root-bar-label {
   overflow: hidden;
@@ -837,63 +825,3 @@ kbd {
   font-family: ui-monospace, monospace;
   font-size: 12px;
 }
-
-/* --- Apply bar + confirmation dialog: CW-20260904-0023 --- */
-.apply-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  white-space: nowrap;
-}
-.apply-bar button { font-size: 11px; padding: 4px 10px; }
-.apply-bar-status { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-/* Lit: something genuinely differs and Apply is enabled -- distinct from
-   the ordinary --muted status text so the one moment that matters (there
-   is something to stage) reads differently from "up to date". */
-.apply-bar-lit { color: var(--accent); font-style: normal; }
-
-.apply-confirm-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(8, 9, 11, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-  /* This overlay sits inside the header's own --wails-draggable:drag
-     region (see .manager-shell header's comment) -- opt out, the same way
-     every header button already must, so a click meant to hit Cancel or
-     the overlay backdrop is never swallowed as a window drag. */
-  --wails-draggable: no-drag;
-}
-.apply-confirm {
-  width: 560px;
-  max-width: calc(100vw - 40px);
-  max-height: calc(100vh - 80px);
-  overflow-y: auto;
-  background: #14161b;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 20px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
-}
-.apply-confirm h2 { font-size: 15px; font-weight: 600; }
-.apply-confirm p { line-height: 1.6; }
-.apply-confirm code {
-  font-family: ui-monospace, monospace;
-  font-size: 11.5px;
-  word-break: break-all;
-}
-.apply-confirm-list { font-size: 12.5px; }
-.apply-confirm-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-.apply-confirm-run { border-color: var(--accent); color: var(--accent); font-weight: 600; }

@@ -14,7 +14,6 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
-	"github.com/hollis-labs/tachyon/internal/apply"
 	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/bindingcomposer"
 	"github.com/hollis-labs/tachyon/internal/boot"
@@ -127,13 +126,6 @@ func New(cfg Config) (*Shell, error) {
 	launcher := launch.NewService(rootStore)
 	composer := bindingcomposer.NewService(rootStore, launcher)
 	compositionPreview := preview.NewService(rootStore, preview.Options{})
-	// Same rootStore a fourth time: Apply (CW-20260904-0023) stages
-	// whichever bundle everything else above is reading. apply.Options{}
-	// (the zero value) is real behavior — the real AGENTS_HOME
-	// (apply.ResolveAgentsHome) and a real `make install-system` runner
-	// (apply.ExecRunner) — never overridden here; only this package's own
-	// tests override either.
-	stager := apply.NewService(rootStore, apply.Options{})
 	var projectStore project.Store
 	if cfg.ProjectStorePath != "" {
 		projectStore.Path = cfg.ProjectStorePath
@@ -174,7 +166,6 @@ func New(cfg Config) (*Shell, error) {
 			application.NewService(launcher),
 			application.NewService(composer),
 			application.NewService(compositionPreview),
-			application.NewService(stager),
 			application.NewService(projects),
 		},
 		LogLevel: slog.LevelWarn,

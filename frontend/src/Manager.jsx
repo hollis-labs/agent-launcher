@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Apply as ApplyAPI, Manager as ManagerAPI, Project as ProjectAPI, Shell } from "./bridge.js";
+import { Manager as ManagerAPI, Project as ProjectAPI, Shell } from "./bridge.js";
 import { base64ToText, textToBase64 } from "./bytes.js";
 // CW-20260903-0010's "new artifact" entry point. Its own file, its own
 // state; see NewArtifact.jsx's header comment for why it is not folded in
@@ -36,17 +36,6 @@ export default function Manager({ route }) {
   // both are reachable from every tab, with no navigation required.
   const bundleDirtyRef = useRef(false);
 
-  // applyStatusBump is CW-20260904-0023's "genuinely re-evaluated whenever
-  // it matters, not computed once and cached": Bundle() bumps this after
-  // every successful Save (the only place a template/skill/prompt file's
-  // content can change from inside the manager), and ApplyBar's own
-  // status-fetch effect depends on it, so a save is reflected in the Apply
-  // button's enablement without the user having to do anything else. A
-  // root change already bumps bundleGeneration, which ApplyBar also
-  // depends on directly -- see its own effect below.
-  const [applyStatusBump, setApplyStatusBump] = useState(0);
-  const bumpApplyStatus = useCallback(() => setApplyStatusBump((n) => n + 1), []);
-
   useEffect(() => {
     const onHash = () =>
       setTab(window.location.hash === "#/manager/settings" ? "settings" : "bundle");
@@ -60,25 +49,16 @@ export default function Manager({ route }) {
         <h1>⌁ Tachyon</h1>
         <button onClick={() => (window.location.hash = "#/manager")}>Bundle</button>
         <button onClick={() => (window.location.hash = "#/manager/settings")}>Settings</button>
-        {/* Persistently visible in every tab, not behind a menu --
-            CW-20260904-0019's own reasoning, extended here to Apply
-            (CW-20260904-0023): editing a template/skill/prompt can happen
-            from deep in the tree/editor pane, and Apply's own enablement
-            must be visible regardless of which tab is showing, the same
-            way BundleRootBar already is. */}
-        <div className="header-status-group">
-          <ApplyBar refreshKey={`${bundleGeneration}:${applyStatusBump}`} />
-          <BundleRootBar
-            dirtyRef={bundleDirtyRef}
-            onRootChanged={() => setBundleGeneration((g) => g + 1)}
-          />
-        </div>
+        <BundleRootBar
+          dirtyRef={bundleDirtyRef}
+          onRootChanged={() => setBundleGeneration((g) => g + 1)}
+        />
       </header>
       <main className={tab === "bundle" ? "no-pad" : undefined}>
         {tab === "settings" ? (
           <Settings />
         ) : (
-          <Bundle key={bundleGeneration} dirtyRef={bundleDirtyRef} onSaved={bumpApplyStatus} />
+          <Bundle key={bundleGeneration} dirtyRef={bundleDirtyRef} />
         )}
       </main>
     </div>
@@ -197,217 +177,6 @@ function BundleRootBar({ onRootChanged, dirtyRef }) {
   );
 }
 
-// NAME_LIST_CUTOFF is how many paths the confirmation dialog names outright
-// before falling back to "N more" — CW-20260904-0023's own "by name if the
-// list is short" call, judged here: past this many, a wall of filenames
-// stops being more informative than a count and starts being noise.
-const NAME_LIST_CUTOFF = 8;
-
-// namesOrCount renders a list of paths as a comma-joined string, or --
-// past NAME_LIST_CUTOFF -- the first few names followed by a count of the
-// rest. Returns "" for an empty list so a caller can test truthiness
-// directly.
-function namesOrCount(names) {
-  if (!names || names.length === 0) return "";
-  if (names.length <= NAME_LIST_CUTOFF) return names.join(", ");
-  const shown = names.slice(0, NAME_LIST_CUTOFF).join(", ");
-  return `${shown}, and ${names.length - NAME_LIST_CUTOFF} more`;
-}
-
-// ApplyBar is CW-20260904-0023's whole surface for the manager's Apply
-// action: enablement (lit only when the bundle and AGENTS_HOME genuinely
-// differ — internal/apply.Compare, a real content-based tree comparison,
-// not a dirty flag), a status line naming what differs, and the button
-// that opens the confirmation dialog Apply actually runs behind.
-//
-// Persistently visible in the header (see Manager()) rather than only on
-// the Bundle tab, for the identical reason BundleRootBar already is: a
-// save that lights this up can happen from deep in the tree/editor pane,
-// and the person needs to see it regardless of which tab they're on.
-//
-// refreshKey is a string Manager() changes whenever Apply's own status
-// might have: after a bundle-root change (bundleGeneration) and after
-// every successful Save (applyStatusBump) — see Manager()'s own comment.
-// This component also re-checks on window focus, the same way Bundle()'s
-// tree does, for the same reason: regaining focus is when a person is
-// most likely returning from having edited the bundle another way (git,
-// another editor).
-function ApplyBar({ refreshKey }) {
-  const [status, setStatus] = useState(null); // internal/apply.Summary, or null while loading
-  const [loadError, setLoadError] = useState(null);
-  const [applying, setApplying] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [result, setResult] = useState(null); // {kind: 'ok'|'err', text}
-  const requestIdRef = useRef(0);
-
-  const loadStatus = useCallback(() => {
-    const requestId = ++requestIdRef.current;
-    ApplyAPI.Status()
-      .then((s) => {
-        if (requestIdRef.current !== requestId) return; // superseded by a newer check
-        setStatus(s);
-        setLoadError(null);
-      })
-      .catch((e) => {
-        if (requestIdRef.current !== requestId) return;
-        setLoadError(String(e?.message ?? e));
-      });
-  }, []);
-
-  useEffect(() => {
-    loadStatus();
-    window.addEventListener("focus", loadStatus);
-    return () => window.removeEventListener("focus", loadStatus);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshKey is
-    // a deliberate extra trigger, not a value read inside the effect.
-  }, [loadStatus, refreshKey]);
-
-  const canApply = !!status?.differs && !applying;
-
-  // Opening the confirmation dialog is the ONLY thing this button does —
-  // see confirmApply below for the only place Apply() is actually called,
-  // and cancelApply for why Cancel has zero side effects.
-  const openConfirm = () => {
-    if (!canApply) return;
-    setResult(null);
-    setConfirming(true);
-  };
-
-  // cancelApply is the real abort CW-20260904-0023 calls for: it only ever
-  // closes the dialog. Nothing has run yet at the point this can be
-  // called — ApplyAPI.Apply() is called from nowhere but confirmApply,
-  // below — so there is no partial state to unwind and nothing to undo.
-  const cancelApply = () => setConfirming(false);
-
-  // confirmApply is the one and only call site of ApplyAPI.Apply() in this
-  // whole file (and, per this task's own grep check, in the whole app) —
-  // reachable only from a person clicking "Apply" inside the confirmation
-  // dialog this function itself closes first.
-  const confirmApply = () => {
-    setConfirming(false);
-    setApplying(true);
-    setResult(null);
-    ApplyAPI.Apply()
-      .then((res) => {
-        setResult({
-          kind: "ok",
-          text: `Applied to ${res.agentsHome}.`,
-        });
-        loadStatus();
-      })
-      .catch((e) => setResult({ kind: "err", text: String(e?.message ?? e) }))
-      .finally(() => setApplying(false));
-  };
-
-  return (
-    <div className="apply-bar">
-      <button
-        onClick={openConfirm}
-        disabled={!canApply}
-        title={status?.differs ? `Stage ${status.description} into ${status.agentsHome}` : "Nothing to stage"}
-      >
-        {applying ? "Applying…" : "Apply"}
-      </button>
-      {status && (
-        <span className={`muted apply-bar-status${status.differs ? " apply-bar-lit" : ""}`}>
-          {status.differs ? status.description : "Up to date"}
-        </span>
-      )}
-      {loadError && <span className="err">{loadError}</span>}
-      {result && <span className={result.kind === "ok" ? "ok" : "err"}>{result.text}</span>}
-      {confirming && (
-        <ApplyConfirmDialog status={status} onConfirm={confirmApply} onCancel={cancelApply} />
-      )}
-    </div>
-  );
-}
-
-// ApplyConfirmDialog is CW-20260904-0023's actual deliverable: the
-// confirmation `make install-system` runs behind. Chrispian's own framing
-// (task comment 2698, as corrected in this task's own instructions) is
-// that this makes staging SAFER than typing the command by hand — the CLI
-// runs the mirror with no confirmation, no summary of what's about to be
-// deleted, and no way to back out. This dialog is what a person typing
-// `make install-system` themselves never gets:
-//
-//   - the three source directories and the destination, named plainly;
-//   - what will be copied or updated, reusing the exact diff the
-//     enablement check already computed (never a second, possibly
-//     disagreeing calculation);
-//   - that staged files absent from the bundle are DELETED — the
-//     --delete this mirror runs with, which the CLI never announces —
-//     with a count, and by name when the list is short;
-//   - that this does not touch ~/.claude, and does not run
-//     `cairn install` — the two things this task deliberately does NOT
-//     do, said outright so neither is a silent assumption;
-//   - a Cancel that is a real abort: see ApplyBar's own cancelApply,
-//     which is the only thing this dialog's Cancel button calls.
-function ApplyConfirmDialog({ status, onConfirm, onCancel }) {
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onCancel();
-      }
-    };
-    // Capture phase: this dialog sits inside the manager window, which
-    // itself hides on Escape (HideOnEscape) -- without capturing first,
-    // that native/runtime handling could fire on the same keypress this
-    // dialog means to just close. Escape here means "cancel the dialog",
-    // never "hide the whole manager mid-confirmation".
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [onCancel]);
-
-  const kinds = status?.kinds ?? [];
-  const copied = kinds.flatMap((k) => [...k.added, ...k.changed].map((n) => `${k.kind}/${n}`));
-  const deleted = kinds.flatMap((k) => k.removed.map((n) => `${k.kind}/${n}`));
-
-  return (
-    <div className="apply-confirm-overlay" onClick={onCancel}>
-      <div className="apply-confirm" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <h2>Apply staged changes?</h2>
-
-        <p>
-          Runs <code>make install-system</code> in the bundle, mirroring{" "}
-          <code>{status?.bundleRoot}/{"{templates,skills,prompts}"}</code> onto{" "}
-          <code>{status?.agentsHome}/{"{templates,skills,prompts}"}</code>.
-        </p>
-
-        {copied.length > 0 && (
-          <p className="apply-confirm-list">
-            <strong>Copied or updated ({copied.length}):</strong> {namesOrCount(copied)}
-          </p>
-        )}
-
-        {deleted.length > 0 ? (
-          <p className="warn apply-confirm-list">
-            <strong>Deleted ({deleted.length}):</strong> {namesOrCount(deleted)}
-            <br />
-            Staged at the destination, but no longer in the bundle — this mirror runs
-            with <code>--delete</code>, so these are removed. Any hand-edit made
-            directly to the staged copy, rather than the bundle, is lost.
-          </p>
-        ) : (
-          <p className="muted">Nothing will be deleted — every staged file is still in the bundle.</p>
-        )}
-
-        <p className="muted">
-          Does not touch <code>~/.claude</code>. Does not run <code>cairn install</code>.
-        </p>
-
-        <div className="apply-confirm-actions">
-          <button className="apply-confirm-run" onClick={onConfirm} autoFocus>
-            Apply
-          </button>
-          <button onClick={onCancel}>Cancel</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // KIND_META labels and color-codes each of the six artifact kinds. It exists
 // so a row or an open tab can say what it is at a glance — necessary because
 // every one of the eight role-prose files shares a basename with a profile
@@ -441,7 +210,7 @@ function refFor(node) {
   return `${node.kind} ${node.id}`;
 }
 
-function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
+function Bundle({ dirtyRef: sharedDirtyRef } = {}) {
   const [tree, setTree] = useState(null);
   const [treeError, setTreeError] = useState(null);
   const [selectedRef, setSelectedRef] = useState(null);
@@ -633,14 +402,6 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
     setStatus(null);
     ManagerAPI.Save(node.kind, node.id, textToBase64(draftText))
       .then((content) => {
-        // The write already landed on disk regardless of which branch
-        // below runs (node.kind/node.id were fixed above, before any
-        // await), so Apply's own enablement (CW-20260904-0023) must be
-        // re-evaluated either way -- a template/skill/prompt save is
-        // exactly the kind of change that can light up, or dark out, the
-        // Apply button, and "the user moved on to a different node" is not
-        // a reason to skip re-checking it.
-        onSaved?.();
         if (currentRequestRef.current !== myRef) {
           // The user moved on to a different node while this save was in
           // flight. The write already landed correctly (node.kind/node.id
@@ -671,7 +432,7 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
       // operation that set it actually finishes, or navigating away mid-save
       // would leave Save permanently disabled for every node after it.
       .finally(() => setSaving(false));
-  }, [selectedNode, loaded, openError, loadingContent, saving, draftText, loadTree, onSaved]);
+  }, [selectedNode, loaded, openError, loadingContent, saving, draftText, loadTree]);
 
   const onEditorKeyDown = (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "s") {

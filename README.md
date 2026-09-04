@@ -70,6 +70,9 @@ Stated so nobody designs around a promise that is not there.
   machine it runs on; it is human-executed, permanently. (`cairn install
   --check` is safe and may be surfaced read-only.)
 - **It never runs git.** It writes files into a git repo; the user commits.
+- **It never stages a second copy of bundle content.** The active bundle is
+  the source for editing, preview and launch; saving an edit needs no Apply or
+  install step.
 - **It holds no session state.** No list, no attach, no resume.
 - **It never writes to a Cairn store.** The catalog is the bundle.
 - **It does not validate content.** Shape and existence only.
@@ -80,8 +83,9 @@ The manager, composition, preview and launch paths work. Tachyon reads the
 active bundle, including ordinary profiles in both `profiles/` and
 `profiles/parts/`, shows it as a tree, and edits it as text byte-for-byte. The
 manager can create bundle artifacts, edit bindings, inspect Cairn's effective
-skills preview, manage project scopes, apply the active bundle and run the
-guarded old-boot-directory sweep on demand.
+skills preview, manage project scopes and run the guarded old-boot-directory
+sweep on demand. A saved edit is immediately available to the next Cairn
+preview or launch because both read the same active bundle directly.
 
 Summoning the palette can launch either a saved binding or an unsaved
 composition through Cairn into an iTerm2 session. Composition drafts survive
