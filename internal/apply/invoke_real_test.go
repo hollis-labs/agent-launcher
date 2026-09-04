@@ -15,10 +15,11 @@ import (
 
 // scratchMakefile is agent-setup's real Makefile (~/dev/projects/agent-setup
 // /Makefile), copied here as a literal string -- not read from that repo at
-// test time, per this task's own standing rule that no test ever points at
-// the real agent-setup checkout or the real ~/.config/agents. This string is
-// what the tests below actually exercise install-system's real recipe
-// against -- three real rsyncs, not a stand-in.
+// test time, per this package's standing rule that no test ever runs against
+// the real agent-setup checkout or the real ~/.config/agents. The canonical
+// Makefile deliberately has no install-system target now: the bundle is
+// self-contained, so a staged copy would only go stale. The tests below
+// exercise that real absence rather than preserving the retired recipe.
 //
 // Staying in sync with the real file is enforced at test run time, not by a
 // comment someone has to remember to update: requireMake (below) hashes the
@@ -30,19 +31,11 @@ const scratchMakefile = `.DEFAULT_GOAL := help
 SHELL := /bin/bash
 CAIRN ?= cairn
 FIXTURE := /tmp/agent-setup-fixture
-AGENTS_HOME ?= $(HOME)/.config/agents
 
-.PHONY: help install-system list install-check install-fixture lint
+.PHONY: help list install-check install-fixture lint
 
 help: ## Show the targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
-
-install-system: ## Stage templates/, skills/ and prompts/ into ~/.config/agents (the installed location)
-	@mkdir -p $(AGENTS_HOME)
-	rsync -a --delete --delete-excluded --exclude='.DS_Store' templates/ $(AGENTS_HOME)/templates/
-	rsync -a --delete --delete-excluded --exclude='.DS_Store' skills/    $(AGENTS_HOME)/skills/
-	rsync -a --delete --delete-excluded --exclude='.DS_Store' prompts/   $(AGENTS_HOME)/prompts/
-	@echo "staged into $(AGENTS_HOME)"
 
 list: ## Enumerate the catalog cairn reads out of this directory
 	$(CAIRN) list --profile .
@@ -60,11 +53,18 @@ lint: ## Shell syntax across the hooks
 	@for f in hooks/*.sh; do bash -n $$f && echo "  ok  $$f"; done
 
 # Every target above passes ` + "`" + `--profile .` + "`" + `: this directory is the catalog, and
-# cairn's default bundle (~/.config/agents) deliberately holds only the
-# templates, skills and prompts ` + "`" + `install-system` + "`" + ` stages there. The profiles are
-# not copied anywhere — a second copy is the thing the seeder was, and retiring it
-# was the point. Export CAIRN_PROFILE_ROOT to this checkout to boot without the
-# flag.
+# nothing is copied out of it. Export CAIRN_PROFILE_ROOT to this checkout to
+# boot without the flag.
+#
+# There is no ` + "`" + `install-system` + "`" + ` any more. It staged templates/, skills/ and
+# prompts/ into ~/.config/agents because the profiles named that location by
+# absolute path; they name $CAIRN_PROFILE_ROOT now, so the target had nothing
+# left to serve. The reasoning it was built on — that cairn must run where this
+# checkout is absent — stopped holding when the catalog became the store: such
+# a machine has no profiles either, and cairn refuses at the open. What it left
+# behind was a second copy of this repo's content, which is what the seeder was
+# and what retiring the seeder was for. ~/.config/agents is cairn's default
+# bundle root and nothing else; it holds no part of this repo.
 #
 # ` + "`" + `cairn install` + "`" + ` with no --root writes the live ~/.claude and is human-executed,
 # permanently: an agent that runs it rewrites the configuration it is running
@@ -74,7 +74,7 @@ lint: ## Shell syntax across the hooks
 func requireMake(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("make"); err != nil {
-		t.Skipf("make not on PATH, skipping the real make install-system check: %v", err)
+		t.Skipf("make not on PATH, skipping the real Makefile check: %v", err)
 	}
 	requireScratchMakefileMatchesReal(t)
 }
@@ -83,11 +83,10 @@ func requireMake(t *testing.T) {
 // the real ~/dev/projects/agent-setup/Makefile -- read-only, never written
 // to, per this package's standing rule -- and fails loudly if its SHA-256
 // no longer matches scratchMakefile's. Without this, a change to the real
-// recipe (a flag on the rsync lines, a fourth staged directory, different
-// --delete-excluded semantics) would leave every test in this package
-// passing against a stale copy, silently. If the real file isn't present
-// on this machine at all, it skips rather than failing an environment that
-// legitimately doesn't have that checkout.
+// contract (including restoring or replacing install-system) would leave
+// every test in this package passing against a stale copy, silently. If the
+// real file isn't present on this machine at all, it skips rather than failing
+// an environment that legitimately doesn't have that checkout.
 func requireScratchMakefileMatchesReal(t *testing.T) {
 	t.Helper()
 
@@ -119,90 +118,38 @@ func requireScratchMakefileMatchesReal(t *testing.T) {
 	}
 }
 
-// TestExecRunner_RealMakeStagesAndActuallyDeletes is the acceptance bullet
-// "the real make install-system actually runs and actually deletes a
-// staged file absent from the bundle" -- proven against a real make
-// binary and real rsync, entirely inside two scratch directories this test
-// owns. Never touches ~/.config/agents or ~/dev/projects/agent-setup.
-func TestExecRunner_RealMakeStagesAndActuallyDeletes(t *testing.T) {
+// TestExecRunner_RealMakefileWithoutInstallSystemSurfacesMakesRealOutput
+// exercises the canonical Makefile, not a one-line stand-in. install-system
+// retired when agent-setup became a self-contained bundle, so Tachyon's legacy
+// Apply invocation must fail clearly and must not mutate its requested target.
+// Everything runs inside scratch directories; the real checkout is only read
+// by the drift guard above.
+func TestExecRunner_RealMakefileWithoutInstallSystemSurfacesMakesRealOutput(t *testing.T) {
 	requireMake(t)
 
 	bundleRoot := t.TempDir()
 	agentsHome := t.TempDir()
 
 	mustWrite(t, filepath.Join(bundleRoot, "Makefile"), scratchMakefile)
-	mustWrite(t, filepath.Join(bundleRoot, "templates", "agents.md"), "template body\n")
-	mustWrite(t, filepath.Join(bundleRoot, "skills", "demo", "SKILL.md"), "skill body\n")
-	mustWrite(t, filepath.Join(bundleRoot, "prompts", "hello.md"), "prompt body\n")
+	sentinel := filepath.Join(agentsHome, "keep-me")
+	mustWrite(t, sentinel, "unchanged\n")
 
-	// A file staged at the destination that the bundle does not have --
-	// what --delete must remove.
-	orphan := filepath.Join(agentsHome, "prompts", "orphan.md")
-	mustWrite(t, orphan, "leftover from a previous stage\n")
-	if _, err := os.Stat(orphan); err != nil {
-		t.Fatalf("setup: orphan file not present before Apply: %v", err)
+	_, err := apply.Invoke(context.Background(), apply.ExecRunner(), bundleRoot, agentsHome)
+	if err == nil {
+		t.Fatal("Invoke succeeded against agent-setup's real Makefile; want install-system's deliberate absence surfaced")
 	}
-
-	// Sanity: Compare must read this as "differs" before Apply runs.
-	before, err := apply.Compare(bundleRoot, agentsHome)
-	if err != nil {
-		t.Fatalf("Compare (before): %v", err)
+	if !strings.Contains(err.Error(), "No rule to make target") {
+		t.Errorf("error = %q; want make's own missing-target message surfaced", err.Error())
 	}
-	if !before.Differs {
-		t.Fatalf("Compare (before) = %+v; want Differs=true", before)
-	}
-
-	result, err := apply.Invoke(context.Background(), apply.ExecRunner(), bundleRoot, agentsHome)
-	if err != nil {
-		t.Fatalf("Invoke (real make install-system): %v", err)
-	}
-	t.Logf("make install-system stdout:\n%s", result.Stdout)
-	if !strings.Contains(result.Stdout, "staged into "+agentsHome) {
-		t.Errorf("Stdout = %q; want it to contain the Makefile's own \"staged into %s\" line", result.Stdout, agentsHome)
-	}
-
-	// The orphan file, staged but absent from the bundle, must actually be
-	// gone -- this is --delete really happening, not merely asserted.
-	if _, statErr := os.Stat(orphan); !os.IsNotExist(statErr) {
-		t.Fatalf("orphan file %s still exists after Apply; --delete did not run", orphan)
-	}
-
-	// The bundle's own content must actually be staged.
-	for _, rel := range []string{
-		filepath.Join("templates", "agents.md"),
-		filepath.Join("skills", "demo", "SKILL.md"),
-		filepath.Join("prompts", "hello.md"),
-	} {
-		got, readErr := os.ReadFile(filepath.Join(agentsHome, rel))
-		if readErr != nil {
-			t.Fatalf("reading staged %s: %v", rel, readErr)
-		}
-		want, readErr := os.ReadFile(filepath.Join(bundleRoot, rel))
-		if readErr != nil {
-			t.Fatalf("reading bundle %s: %v", rel, readErr)
-		}
-		if string(got) != string(want) {
-			t.Errorf("staged %s = %q; want %q", rel, got, want)
-		}
-	}
-
-	// After Apply, enablement must go dark again -- bundle and staged layer
-	// now match.
-	after, err := apply.Compare(bundleRoot, agentsHome)
-	if err != nil {
-		t.Fatalf("Compare (after): %v", err)
-	}
-	if after.Differs {
-		t.Fatalf("Compare (after) = %+v; want Differs=false immediately after a real Apply", after)
+	if got, readErr := os.ReadFile(sentinel); readErr != nil || string(got) != "unchanged\n" {
+		t.Fatalf("Apply changed its scratch target despite the missing target: content=%q err=%v", got, readErr)
 	}
 }
 
-// TestExecRunner_NoMakefileSurfacesMakesRealOutput and
-// TestExecRunner_MakefileWithoutTargetSurfacesMakesRealOutput are the
-// acceptance bullet "make/target-missing failure surfaces make's own
-// output, not a generic error" -- both simulated by pointing at a real
-// scratch directory that make itself refuses, and reading the *actual*
-// stderr make produced, not a canned message.
+// TestExecRunner_NoMakefileSurfacesMakesRealOutput covers the other real
+// missing-target shape: no Makefile at all. Together with the canonical-file
+// case above, it proves make's actual stderr survives rather than a generic
+// error replacing it.
 func TestExecRunner_NoMakefileSurfacesMakesRealOutput(t *testing.T) {
 	requireMake(t)
 
@@ -212,23 +159,6 @@ func TestExecRunner_NoMakefileSurfacesMakesRealOutput(t *testing.T) {
 	_, err := apply.Invoke(context.Background(), apply.ExecRunner(), bundleRoot, agentsHome)
 	if err == nil {
 		t.Fatal("Invoke succeeded against a bundle with no Makefile at all; want a real failure")
-	}
-	if !strings.Contains(err.Error(), "No rule to make target") {
-		t.Errorf("error = %q; want make's own \"No rule to make target\" message surfaced, not a generic failure", err.Error())
-	}
-	t.Logf("real make error surfaced: %v", err)
-}
-
-func TestExecRunner_MakefileWithoutTargetSurfacesMakesRealOutput(t *testing.T) {
-	requireMake(t)
-
-	bundleRoot := t.TempDir()
-	mustWrite(t, filepath.Join(bundleRoot, "Makefile"), "help:\n\t@echo hi\n")
-	agentsHome := t.TempDir()
-
-	_, err := apply.Invoke(context.Background(), apply.ExecRunner(), bundleRoot, agentsHome)
-	if err == nil {
-		t.Fatal("Invoke succeeded against a Makefile with no install-system target; want a real failure")
 	}
 	if !strings.Contains(err.Error(), "No rule to make target") {
 		t.Errorf("error = %q; want make's own \"No rule to make target\" message surfaced, not a generic failure", err.Error())
