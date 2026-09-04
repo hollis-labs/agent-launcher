@@ -13,7 +13,6 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
-	"github.com/wailsapp/wails/v3/pkg/icons"
 
 	"github.com/hollis-labs/tachyon/internal/apply"
 	"github.com/hollis-labs/tachyon/internal/binding"
@@ -26,6 +25,21 @@ import (
 	"github.com/hollis-labs/tachyon/internal/project"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
+
+const (
+	trayLabel   = "⌁"
+	trayTooltip = "Tachyon"
+)
+
+type trayPresentation interface {
+	SetLabel(string)
+	SetTooltip(string)
+}
+
+func configureTrayPresentation(tray trayPresentation) {
+	tray.SetLabel(trayLabel)
+	tray.SetTooltip(trayTooltip)
+}
 
 // Config is everything the shell needs from its host.
 type Config struct {
@@ -324,29 +338,14 @@ func (s *Shell) wireTray() {
 	menu.AddSeparator()
 	menu.Add("Quit Tachyon").OnClick(func(*application.Context) { s.app.Quit() })
 
+	registerTrayPlacementDefault()
 	s.tray = s.app.SystemTray.New()
-	// No SetLabel here (CW-20260904-0004, issue 2). shell.go was unchanged
-	// since 3e1136c, so the missing icon was not a code regression to find by
-	// diffing — investigated instead: every one of Wails v3's own systray
-	// examples (systray-basic, systray-custom, systray-menu, systray-clock,
-	// v3.0.0-beta.16, checked in the module cache under
-	// github.com/wailsapp/wails/v3@v3.0.0-beta.16/examples/) calls
-	// SetTemplateIcon on darwin and never SetLabel alongside it; SetTooltip is
-	// the label-shaped call they use instead, and macOS's own systray impl
-	// (systemtray_darwin.go) even documents SetTooltip as a deliberate no-op
-	// there ("Tooltips not supported on macOS"). The label/icon pairing this
-	// code carried had no working precedent anywhere in Wails' own tree, so it
-	// is the first thing that changed here — restoring the pairing every
-	// upstream example actually uses, rather than tracing an OS-level
-	// title/image conflict through Cocoa that no example exhibits. The prior
-	// "environmental/Bartender" explanation for the missing icon
-	// (CW-20260903-0006) was measured against a separately ad-hoc-signed .app
-	// and was later retracted once Chrispian confirmed the icon rendered
-	// under `go run .`; nothing here reuses that conclusion, and this change
-	// has NOT been visually confirmed in a menu bar by this agent — it
-	// cannot see one. It needs a human look under `go run .`.
-	s.tray.SetTooltip("Tachyon")
-	s.tray.SetTemplateIcon(icons.SystrayMacTemplate)
+	// The label is Tachyon's visible, accessibility-testable menu-bar mark.
+	// Wails' template image produced a live, clickable status item in the
+	// packaged app, but the mark was invisible and the item had no AX name.
+	// Keep this label-only: it maps directly to NSStatusBarButton.title and
+	// avoids relying on Wails' unchecked NSImage decoding/template rendering.
+	configureTrayPresentation(s.tray)
 
 	// One tray icon serves both windows. applySmartDefaults installs
 	// ToggleWindow as the left-click handler because a window is attached, and
