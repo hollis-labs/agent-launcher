@@ -284,7 +284,26 @@ func (s *Shell) wireTray() {
 	menu.Add("Quit Tachyon").OnClick(func(*application.Context) { s.app.Quit() })
 
 	s.tray = s.app.SystemTray.New()
-	s.tray.SetLabel("⌁")
+	// No SetLabel here (CW-20260904-0004, issue 2). shell.go was unchanged
+	// since 3e1136c, so the missing icon was not a code regression to find by
+	// diffing — investigated instead: every one of Wails v3's own systray
+	// examples (systray-basic, systray-custom, systray-menu, systray-clock,
+	// v3.0.0-beta.16, checked in the module cache under
+	// github.com/wailsapp/wails/v3@v3.0.0-beta.16/examples/) calls
+	// SetTemplateIcon on darwin and never SetLabel alongside it; SetTooltip is
+	// the label-shaped call they use instead, and macOS's own systray impl
+	// (systemtray_darwin.go) even documents SetTooltip as a deliberate no-op
+	// there ("Tooltips not supported on macOS"). The label/icon pairing this
+	// code carried had no working precedent anywhere in Wails' own tree, so it
+	// is the first thing that changed here — restoring the pairing every
+	// upstream example actually uses, rather than tracing an OS-level
+	// title/image conflict through Cocoa that no example exhibits. The prior
+	// "environmental/Bartender" explanation for the missing icon
+	// (CW-20260903-0006) was measured against a separately ad-hoc-signed .app
+	// and was later retracted once Chrispian confirmed the icon rendered
+	// under `go run .`; nothing here reuses that conclusion, and this change
+	// has NOT been visually confirmed in a menu bar by this agent — it
+	// cannot see one. It needs a human look under `go run .`.
 	s.tray.SetTooltip("Tachyon")
 	s.tray.SetTemplateIcon(icons.SystrayMacTemplate)
 

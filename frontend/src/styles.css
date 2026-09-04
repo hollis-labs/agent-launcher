@@ -8,6 +8,18 @@
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #root { height: 100%; }
+html, body {
+  /* Frameless Wails/Cocoa panels (the palette) are movableByWindowBackground
+     at the native layer (Wails' own webview_window_darwin.m /
+     webview_panel_darwin.m — not something this app's Go or CSS sets or can
+     turn off). Any scroll/rubber-band gesture the page itself doesn't claim
+     can therefore read as a window drag. Nothing here should ever scroll the
+     document — the palette's own layout is height:100% and the list below
+     is its own bounded, scrolling region — so this "none" stops WebKit's
+     elastic bounce on the page from ever starting, closing off that path.
+     CW-20260904-0004 (issue 3: scrolling the list wiggled the window). */
+  overscroll-behavior: none;
+}
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
   font-size: 13px;
@@ -50,7 +62,16 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
 
 .palette-list {
   flex: 1;
-  overflow: auto;
+  min-height: 0; /* a flex child's default min-height:auto ignores its own
+                    overflow, which would let the list grow the whole
+                    palette-shell instead of scrolling internally */
+  overflow-y: auto;
+  /* Stops scroll chaining at this element's own boundary (top/bottom of the
+     list) instead of letting the gesture continue past it. Without this,
+     scrolling past either end hands the rest of the gesture to the
+     document, which the html/body rule above cannot then distinguish from a
+     window-drag — see that rule's comment. CW-20260904-0004 (issue 3). */
+  overscroll-behavior: contain;
   list-style: none;
   margin-top: 10px;
 }
@@ -85,6 +106,21 @@ body.palette { background: rgba(16, 17, 21, 0.82); }
   white-space: nowrap;
   max-width: 45%;
 }
+
+/* Persistent manager affordance, present in every palette state (loading,
+   error, empty, populated) — CW-20260904-0004 issue 1. */
+.palette-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+}
+.palette-footer button { font-size: 11px; padding: 4px 10px; }
 
 .manager-shell { height: 100%; display: flex; flex-direction: column; }
 .manager-shell header {

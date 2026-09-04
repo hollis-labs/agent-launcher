@@ -102,22 +102,14 @@ export default function Palette() {
           <div>
             <div className="err">Couldn't load bindings</div>
             <div className="muted" style={{ marginTop: 8 }}>{error}</div>
-            <div style={{ marginTop: 16 }}>
-              <button onClick={() => Shell.OpenManager()}>Open manager</button>
-            </div>
           </div>
         </div>
       ) : bindings === null ? (
         <div className="placeholder muted">Loading bindings…</div>
       ) : filtered.length === 0 ? (
         <div className="placeholder">
-          <div>
-            <div className="muted">
-              {bindings.length === 0 ? "No bindings yet" : "No bindings match your search"}
-            </div>
-            <div style={{ marginTop: 16 }}>
-              <button onClick={() => Shell.OpenManager()}>Open manager</button>
-            </div>
+          <div className="muted">
+            {bindings.length === 0 ? "No bindings yet" : "No bindings match your search"}
           </div>
         </div>
       ) : (
@@ -140,6 +132,21 @@ export default function Palette() {
           ))}
         </ul>
       )}
+
+      {/* Persistent across every state (loading/error/empty/populated) —
+          CW-20260904-0004. Before this, "Open manager" only lived inside the
+          empty/error placeholders (see git history at e71f153 and the commit
+          that first rendered a populated <ul>), so a palette with bindings in
+          it had no path to the manager at all. This footer is the one
+          affordance now; the placeholders above no longer duplicate it. */}
+      <div className="palette-footer">
+        <span className="muted">
+          <kbd>Esc</kbd> dismisses · clicking away dismisses
+        </span>
+        <button type="button" onClick={() => Shell.OpenManager()}>
+          Open manager
+        </button>
+      </div>
     </div>
   );
 }
