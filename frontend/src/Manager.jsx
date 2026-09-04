@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Apply as ApplyAPI, Manager as ManagerAPI, Shell } from "./bridge.js";
+import { Apply as ApplyAPI, Manager as ManagerAPI, Project as ProjectAPI, Shell } from "./bridge.js";
 import { base64ToText, textToBase64 } from "./bytes.js";
 // CW-20260903-0010's "new artifact" entry point. Its own file, its own
 // state; see NewArtifact.jsx's header comment for why it is not folded in
@@ -445,6 +445,7 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
   const [treeError, setTreeError] = useState(null);
   const [selectedRef, setSelectedRef] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
+  const [projectsOpen, setProjectsOpen] = useState(false);
 
   const [originalText, setOriginalText] = useState("");
   const [draftText, setDraftText] = useState("");
@@ -543,6 +544,7 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
     // `.then()` compares itself against to tell whether it is still the most
     // recently REQUESTED response, not merely the most recently SETTLED one.
     currentRequestRef.current = myRef;
+    setProjectsOpen(false);
     setSelectedRef(myRef);
     setSelectedNode(node);
     setOpenError(null);
@@ -585,6 +587,14 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
         if (currentRequestRef.current !== myRef) return;
         setLoadingContent(false);
       });
+  };
+
+  const openProjects = () => {
+    if (dirtyRef.current && !window.confirm("Discard unsaved artifact changes and open Projects?")) return;
+    currentRequestRef.current = null;
+    setSelectedRef(null);
+    setSelectedNode(null);
+    setProjectsOpen(true);
   };
 
   const save = useCallback(() => {
@@ -678,6 +688,15 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
           />
         )}
         {treeError && <p className="err tree-msg">{treeError}</p>}
+        <div className="project-nav">
+          <button className={`project-nav-row${projectsOpen ? " active" : ""}`} onClick={openProjects}>
+            <span className="project-nav-icon">⌂</span>
+            <span>
+              <strong>Projects</strong>
+              <small>Tachyon state · not bundle content</small>
+            </span>
+          </button>
+        </div>
         {/* CW-20260904-0019: tree.state distinguishes "this directory was
             never a bundle" from "this bundle is genuinely empty" — two
             situations that used to render identically (an empty tree, six
@@ -712,13 +731,14 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
         )}
       </aside>
       <section className="editor-pane">
-        {!selectedNode && (
+        {projectsOpen ? (
+          <Projects />
+        ) : !selectedNode ? (
           <p className="note editor-empty">
             Select an artifact on the left to open it. Saving writes its bytes back
             unchanged — nothing here parses, reformats or validates content.
           </p>
-        )}
-        {selectedNode && (
+        ) : (
           <>
             <div className="editor-header">
               <KindBadge kind={selectedNode.kind} />
@@ -745,6 +765,119 @@ function Bundle({ dirtyRef: sharedDirtyRef, onSaved } = {}) {
           </>
         )}
       </section>
+    </div>
+  );
+}
+
+function Projects() {
+  const emptyDraft = { name: "", path: "" };
+  const [views, setViews] = useState([]);
+  const [selectedName, setSelectedName] = useState(null);
+  const [draft, setDraft] = useState(emptyDraft);
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState(null);
+  const requestRef = useRef(0);
+
+  const load = useCallback(() => {
+    const request = ++requestRef.current;
+    return ProjectAPI.List()
+      .then((items) => {
+        if (requestRef.current !== request) return;
+        setViews(items ?? []);
+        setStatus(null);
+      })
+      .catch((e) => {
+        if (requestRef.current !== request) return;
+        setStatus({ kind: "err", text: String(e?.message ?? e) });
+      });
+  }, []);
+
+  useEffect(() => {
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, [load]);
+
+  const selected = views.find((v) => v.project.name === selectedName) ?? null;
+  const select = (view) => {
+    setSelectedName(view.project.name);
+    setDraft({ name: view.project.name, path: view.project.path });
+    setCreating(false);
+    setStatus(null);
+  };
+  const beginCreate = () => {
+    setSelectedName(null);
+    setDraft(emptyDraft);
+    setCreating(true);
+    setStatus(null);
+  };
+  const pickPath = () =>
+    Shell.PickProjectPath()
+      .then((path) => path && setDraft((d) => ({ ...d, path })))
+      .catch((e) => setStatus({ kind: "err", text: String(e?.message ?? e) }));
+
+  const save = async () => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const saved = creating
+        ? await ProjectAPI.Create(draft)
+        : await ProjectAPI.Update(selectedName, draft);
+      await load();
+      setSelectedName(saved.name);
+      setCreating(false);
+      setStatus({ kind: "ok", text: `Saved ${saved.name}.` });
+    } catch (e) {
+      setStatus({ kind: "err", text: String(e?.message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!selected || !window.confirm(`Delete project ${selected.project.name}? Bindings are not changed.`)) return;
+    setBusy(true);
+    try {
+      await ProjectAPI.Delete(selected.project.name);
+      setSelectedName(null);
+      setDraft(emptyDraft);
+      await load();
+      setStatus({ kind: "ok", text: `Deleted ${selected.project.name}. Bindings were left untouched.` });
+    } catch (e) {
+      setStatus({ kind: "err", text: String(e?.message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="projects-pane">
+      <div className="projects-header">
+        <div><h2>Projects</h2><p className="muted">Saved by Tachyon. A project's path is copied literally into a binding.</p></div>
+        <button onClick={beginCreate}>+ New project</button>
+      </div>
+      <div className="projects-body">
+        <aside className="project-list">
+          {views.length === 0 && <p className="muted">No projects yet.</p>}
+          {views.map((view) => (
+            <button key={view.project.name} className={selectedName === view.project.name ? "active" : ""} onClick={() => select(view)}>
+              <strong>{view.project.name}</strong><code>{view.project.path}</code>
+            </button>
+          ))}
+        </aside>
+        <div className="project-detail">
+          {(creating || selected) ? (
+            <>
+              <label>Name<input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
+              <label>Path<div className="project-path-row"><input value={draft.path} spellCheck={false} placeholder="Paste a path or choose a folder" onChange={(e) => setDraft({ ...draft, path: e.target.value })} /><button onClick={pickPath}>Choose…</button></div></label>
+              <div className="project-actions"><button onClick={save} disabled={busy || !draft.name.trim() || !draft.path.trim()}>{busy ? "Saving…" : "Save"}</button>{selected && <button className="danger" onClick={remove} disabled={busy}>Delete</button>}</div>
+              {selected && <div className="project-bindings"><h3>Bindings at this exact path</h3>{selected.bindings.length === 0 ? <p className="muted">None. Bindings on an old path remain self-contained and are not changed here.</p> : <ul>{selected.bindings.map((b) => <li key={b.name}><strong>{b.name}</strong><span>{b.profile}</span><code>{b.scope}</code></li>)}</ul>}</div>}
+            </>
+          ) : <p className="note">Select a project or create one. Project records live under Tachyon's state root, independently of the active bundle.</p>}
+          {status && <p className={status.kind}>{status.text}</p>}
+        </div>
+      </div>
     </div>
   );
 }

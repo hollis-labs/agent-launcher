@@ -111,6 +111,23 @@ func (s *Service) PickBundleRoot() (string, error) {
 	return dir, nil
 }
 
+// PickProjectPath is the Projects pane's native folder picker. It only
+// returns a literal directory path; saving it remains an explicit action in
+// the form, and a pasted path follows the exact same project service call.
+func (s *Service) PickProjectPath() (string, error) {
+	dir, err := s.shell.app.Dialog.OpenFile().
+		SetTitle("Choose a project folder").
+		SetMessage("Pick the directory to save as this project's literal scope path.").
+		CanChooseFiles(false).
+		CanChooseDirectories(true).
+		AttachToWindow(s.shell.manager).
+		PromptForSingleSelection()
+	if err != nil {
+		return "", fmt.Errorf("shell: picking a project path: %w", err)
+	}
+	return dir, nil
+}
+
 // SweepBootDirectories is the manual action the manager's Settings pane
 // offers for CW-20260903-0019's .prev-* sweep: it calls the exact same
 // [Shell.SweepBootDirectories] method the app already calls once, in the

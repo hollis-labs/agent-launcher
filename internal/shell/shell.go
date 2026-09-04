@@ -21,6 +21,7 @@ import (
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/launch"
 	"github.com/hollis-labs/tachyon/internal/manager"
+	"github.com/hollis-labs/tachyon/internal/project"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
 
@@ -40,6 +41,10 @@ type Config struct {
 	// ~/Library/Application Support or, through the default it stores,
 	// implies anything about ~/dev/projects/agent-setup.
 	BundleRootStorePath string
+
+	// ProjectStorePath overrides projects.json. Tests can keep all Tachyon
+	// state in scratch space; the app leaves this empty to use state.Root().
+	ProjectStorePath string
 
 	// Logger receives shell diagnostics. Nil means slog.Default.
 	Logger *slog.Logger
@@ -111,6 +116,16 @@ func New(cfg Config) (*Shell, error) {
 	// (apply.ExecRunner) — never overridden here; only this package's own
 	// tests override either.
 	stager := apply.NewService(rootStore, apply.Options{})
+	var projectStore project.Store
+	if cfg.ProjectStorePath != "" {
+		projectStore.Path = cfg.ProjectStorePath
+	} else {
+		projectStore, err = project.DefaultStore()
+		if err != nil {
+			return nil, err
+		}
+	}
+	projects := project.NewService(projectStore, rootStore)
 
 	s := &Shell{
 		log:           log,
@@ -140,6 +155,7 @@ func New(cfg Config) (*Shell, error) {
 			application.NewService(bindings),
 			application.NewService(launcher),
 			application.NewService(stager),
+			application.NewService(projects),
 		},
 		LogLevel: slog.LevelWarn,
 	})

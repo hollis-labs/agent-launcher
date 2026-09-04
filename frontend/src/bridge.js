@@ -9,6 +9,7 @@ const MANAGER_SERVICE = "github.com/hollis-labs/tachyon/internal/manager.Service
 const BINDING_SERVICE = "github.com/hollis-labs/tachyon/internal/binding.Service";
 const LAUNCH_SERVICE = "github.com/hollis-labs/tachyon/internal/launch.Service";
 const APPLY_SERVICE = "github.com/hollis-labs/tachyon/internal/apply.Service";
+const PROJECT_SERVICE = "github.com/hollis-labs/tachyon/internal/project.Service";
 
 function callService(service, method, ...args) {
   const wails = globalThis.wails;
@@ -45,6 +46,14 @@ export const Shell = {
   // without picking one. It only picks -- the caller still has to hand
   // the result to Manager.SetRoot to actually change anything.
   PickBundleRoot: () => call("PickBundleRoot"),
+  PickProjectPath: () => call("PickProjectPath"),
+};
+
+export const Project = {
+  List: () => callService(PROJECT_SERVICE, "List"),
+  Create: (project) => callService(PROJECT_SERVICE, "Create", project),
+  Update: (oldName, project) => callService(PROJECT_SERVICE, "Update", oldName, project),
+  Delete: (name) => callService(PROJECT_SERVICE, "Delete", name),
 };
 
 // Manager is internal/manager.Service: the bundle tree and the byte-exact
