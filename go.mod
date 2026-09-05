@@ -5,6 +5,7 @@ go 1.26.2
 toolchain go1.26.3
 
 require (
+	github.com/hollis-labs/go-apppaths v0.1.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.16
 	golang.org/x/net v0.56.0
 	gopkg.in/yaml.v3 v3.0.1

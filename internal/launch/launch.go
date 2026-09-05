@@ -54,12 +54,12 @@ package launch
 import (
 	"context"
 	"fmt"
-	"os/exec"
 
 	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/compose"
+	"github.com/hollis-labs/tachyon/internal/config"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
 
@@ -114,11 +114,14 @@ func (s *Service) Launch(name string) error {
 		return fmt.Errorf("launch: resolving boot root: %w", err)
 	}
 
-	// The real cairn binary on PATH, the same lookup cmd/tachyon/main.go
-	// (T11) performs for its own --cairn-less default.
-	cairnPath, err := exec.LookPath("cairn")
+	// internal/config.ResolveCairnPath, the same lookup cmd/tachyon/main.go
+	// (T11) performs for its own --cairn-less default: an explicit
+	// cairnPath from the user's config file first, then PATH -- see that
+	// package's doc for why PATH alone is not enough once Tachyon runs as
+	// a launchd service.
+	cairnPath, err := config.ResolveCairnPath()
 	if err != nil {
-		return fmt.Errorf("launch: cairn not found on PATH: %w", err)
+		return fmt.Errorf("launch: %w", err)
 	}
 
 	return launch(context.Background(), b, bundleRoot, bootRoot, boot.ExecRunner(cairnPath), boot.SpawnITerm2)
@@ -236,9 +239,9 @@ func (s *Service) LaunchComposition(input CompositionInput) error {
 		return fmt.Errorf("launch: resolving boot root: %w", err)
 	}
 
-	cairnPath, err := exec.LookPath("cairn")
+	cairnPath, err := config.ResolveCairnPath()
 	if err != nil {
-		return fmt.Errorf("launch: cairn not found on PATH: %w", err)
+		return fmt.Errorf("launch: %w", err)
 	}
 
 	comp := compositionFromInput(input, bundleRoot, bootRoot)

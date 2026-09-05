@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/bundle"
+	"github.com/hollis-labs/tachyon/internal/config"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
 
@@ -27,7 +27,7 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 	bundleFlag := fs.String("bundle", "", "bundle root to boot from (default: the app's own active bundle, same as bundle.DefaultRootStore resolves)")
 	bootRootFlag := fs.String("boot-root", "", "where boot directories are planted (default: internal/state.BootRoot(), never ~/dev/agent-os — see D9)")
 	scopeFlag := fs.String("scope", "", "override the binding's own scope (cairn boot --scope)")
-	cairnFlag := fs.String("cairn", "", "path to the cairn binary (default: looked up on PATH)")
+	cairnFlag := fs.String("cairn", "", "path to the cairn binary (default: internal/config's cairnPath, then PATH)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: tachyon [flags] <target>\n\n")
 		fmt.Fprintf(stderr, "Flags must come before <target> -- this is the standard library's flag\n")
@@ -72,9 +72,9 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 
 	cairnPath := *cairnFlag
 	if cairnPath == "" {
-		p, err := exec.LookPath("cairn")
+		p, err := config.ResolveCairnPath()
 		if err != nil {
-			fmt.Fprintf(stderr, "tachyon: cairn not found on PATH (pass --cairn to point at one explicitly): %v\n", err)
+			fmt.Fprintf(stderr, "tachyon: %v (pass --cairn to point at one explicitly)\n", err)
 			return 1
 		}
 		cairnPath = p
