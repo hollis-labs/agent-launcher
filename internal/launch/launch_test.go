@@ -2,6 +2,7 @@ package launch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -47,12 +48,14 @@ type spawnRecorder struct {
 	called bool
 	argv   []string
 	cwd    string
+	env    []string
 }
 
-func (r *spawnRecorder) spawn(argv []string, cwd string) error {
+func (r *spawnRecorder) spawn(argv []string, cwd string, env []string) error {
 	r.called = true
 	r.argv = argv
 	r.cwd = cwd
+	r.env = env
 	return nil
 }
 
@@ -96,14 +99,32 @@ const projectDirNilScopeFixture = `{
 }`
 
 // unknownProviderFixture reports a provider this package's harnessBinary
-// map has no entry for.
+// map has no entry for. "opencode" is deliberately real: cairn knows the
+// name and refuses to render a layout for it, so this is the shape a
+// launcher would actually meet rather than an invented word.
 const unknownProviderFixture = `{
-  "boot_dir": "/state/boot/codex-thing/current",
-  "provider": "codex",
+  "boot_dir": "/state/boot/opencode-thing/current",
+  "provider": "opencode",
   "scope": null,
   "settings_path": null,
   "cwd_preference": "boot_dir",
   "project_dir_arg": null
+}`
+
+// codexFixture is the shape a real `cairn boot <target> --provider codex
+// --json` prints, reduced to the keys this package acts on -- see
+// internal/boot/invoke_test.go's realCodexBootReportFixture for the whole
+// captured document. Its boot_dir points nowhere real; the tests that need
+// a boot directory on disk build their own.
+const codexFixture = `{
+  "boot_dir": "/state/boot/codex-coord-agent-setup/current",
+  "provider": "codex",
+  "scope": "/Users/chrispian/dev/projects/agent-setup",
+  "settings_path": "/state/boot/codex-coord-agent-setup/current/config.toml",
+  "cwd_preference": "boot_dir",
+  "project_dir_arg": ["--add-dir", "{{.ProjectDir}}"],
+  "env_amendments": ["CODEX_HOME={{.BootDir}}"],
+  "home_resource_paths": null
 }`
 
 // --- launch() ----------------------------------------------------------
@@ -204,7 +225,7 @@ func TestLaunch_UnrecognizedCwdPreferenceIsAnError(t *testing.T) {
 func TestLaunch_UnknownProviderIsAnError(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(unknownProviderFixture)}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "codex-thing", Profile: "x", Scope: "/x"}
+	b := binding.Binding{Name: "opencode-thing", Profile: "x", Scope: "/x"}
 
 	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
 	if err == nil {
@@ -992,8 +1013,14 @@ func TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition(t *tes
 		filepath.Join(bundleRoot, "profiles", target+".md"),
 		filepath.Join(bundleRoot, "profiles", addedPart+".md"),
 		filepath.Join(bundleRoot, "prompts", prompt+".md"),
-		filepath.Join(home, ".config", "agents", "skills", addedSkill, "SKILL.md"),
-		filepath.Join(home, ".config", "agents", "skills", partOnlySkill, "SKILL.md"),
+		// Skills live in the bundle, which is what --profile names and what
+		// Cairn resolves --skill against. This used to read
+		// ~/.config/agents/skills, Cairn's default bundle location when no
+		// --profile is given -- a path this launch never uses and which no
+		// longer exists on this machine, so the fixture check failed on a
+		// bundle that was in fact complete.
+		filepath.Join(bundleRoot, "skills", addedSkill, "SKILL.md"),
+		filepath.Join(bundleRoot, "skills", partOnlySkill, "SKILL.md"),
 	} {
 		if _, statErr := os.Stat(required); statErr != nil {
 			t.Fatalf("required live-bundle fixture %s is unavailable: %v", required, statErr)
@@ -1099,4 +1126,273 @@ func gitStatusShort(t *testing.T, dir string) string {
 		t.Fatalf("git -C %s status --short: %v\n%s", dir, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// --- codex (CW-20260906-0001) ---------------------------------------------
+
+// codexReport renders the Codex boot report for a given boot directory and
+// scope, matching the real captured document's keys (see
+// internal/boot/invoke_test.go's realCodexBootReportFixture). Templating the
+// paths is what lets a test point the report at directories that actually
+// exist on disk, which the home-resource steps need.
+func codexReport(bootDir, scope string, homeResources string) string {
+	return `{
+  "boot_dir": ` + quoteJSON(bootDir) + `,
+  "provider": "codex",
+  "scope": ` + quoteJSON(scope) + `,
+  "settings_path": ` + quoteJSON(filepath.Join(bootDir, "config.toml")) + `,
+  "cwd_preference": "boot_dir",
+  "project_dir_arg": ["--add-dir", "{{.ProjectDir}}"],
+  "env_amendments": ["CODEX_HOME={{.BootDir}}"],
+  "home_resource_paths": ` + homeResources + `
+}`
+}
+
+func quoteJSON(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// TestLaunch_CodexSpawnsFromTheBootDirWithItsHomeAndScope is the whole Codex
+// launch shape in one assertion set, and it is exactly the manual recipe
+// Cairn's own examples/README.md documents: cwd is the boot directory (so
+// Codex discovers the AGENTS.md, config.toml and .agents/skills planted
+// there), CODEX_HOME points at that same directory, and the real project is
+// granted with --add-dir. Nothing about it is a second code path -- the same
+// runComposition that launches Claude produced it.
+func TestLaunch_CodexSpawnsFromTheBootDirWithItsHomeAndScope(t *testing.T) {
+	bootDir := "/state/boot/codex-coord-agent-setup/current"
+	scope := "/Users/chrispian/dev/projects/agent-setup"
+	fr := &fakeRunner{stdout: []byte(codexReport(bootDir, scope, "null"))}
+	rec := &spawnRecorder{}
+	b := binding.Binding{Name: "codex-coord-agent-setup", Profile: "orchestrator", Scope: scope}
+
+	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if !rec.called {
+		t.Fatal("spawn was not called")
+	}
+	if rec.cwd != bootDir {
+		t.Errorf("cwd = %q; want the boot directory %q", rec.cwd, bootDir)
+	}
+	wantArgv := []string{"codex", "--add-dir", scope}
+	if !reflect.DeepEqual(rec.argv, wantArgv) {
+		t.Errorf("argv = %v; want %v", rec.argv, wantArgv)
+	}
+	wantEnv := []string{"CODEX_HOME=" + bootDir}
+	if !reflect.DeepEqual(rec.env, wantEnv) {
+		t.Errorf("env = %v; want %v", rec.env, wantEnv)
+	}
+	// The exec-only probe flag must never reach an interactive launch.
+	for _, tok := range rec.argv {
+		if strings.Contains(tok, "--skip-git-repo-check") {
+			t.Errorf("interactive codex argv carries the exec-only flag: %v", rec.argv)
+		}
+	}
+	// Claude's flag is Claude's.
+	for _, tok := range rec.argv {
+		if tok == "--settings" {
+			t.Errorf("codex argv carries claude's --settings flag: %v", rec.argv)
+		}
+	}
+}
+
+// TestLaunch_ClaudeGainedNothing is the regression guard this whole
+// increment is fenced by: a Claude launch must reach spawn with exactly the
+// argv and cwd it always did, and with no environment at all -- the
+// difference between the two providers is entirely in what Cairn's report
+// says, and Claude's says nothing new.
+func TestLaunch_ClaudeGainedNothing(t *testing.T) {
+	fr := &fakeRunner{stdout: []byte(bootDirFixture)}
+	rec := &spawnRecorder{}
+	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/Users/chrispian/dev/hollis-labs/apps/nanite"}
+
+	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	wantArgv := []string{"claude", "--settings", "/state/boot/eng-nanite/current/.claude/settings.json"}
+	if !reflect.DeepEqual(rec.argv, wantArgv) {
+		t.Fatalf("argv = %v; want %v", rec.argv, wantArgv)
+	}
+	if rec.cwd != "/state/boot/eng-nanite/current" {
+		t.Errorf("cwd = %q; want the boot directory", rec.cwd)
+	}
+	if rec.env != nil {
+		t.Fatalf("env = %v; want nil -- a claude launch adds nothing to the terminal's environment", rec.env)
+	}
+}
+
+// TestRunComposition_ProviderReachesTheCairnArgv: the compose form's
+// provider control has to arrive at cairn as --provider, or the boot
+// directory is rendered for the wrong harness and everything downstream is
+// consistent with the wrong answer.
+func TestRunComposition_ProviderReachesTheCairnArgv(t *testing.T) {
+	bootDir := "/state/boot/orchestrator/current"
+	scope := "/Users/chrispian/dev/projects/agent-setup"
+	fr := &fakeRunner{stdout: []byte(codexReport(bootDir, scope, "null"))}
+	rec := &spawnRecorder{}
+
+	comp := compositionFromInput(CompositionInput{
+		Target:   "orchestrator",
+		Provider: "codex",
+		Parts:    []string{"codex-cli"},
+	}, "/bundle/root", t.TempDir())
+
+	if err := runComposition(context.Background(), comp, comp.BootRoot, fr.run, rec.spawn); err != nil {
+		t.Fatalf("runComposition: %v", err)
+	}
+	if !argvHasPair(fr.gotArgv, "--provider", "codex") {
+		t.Fatalf("cairn argv %v does not carry --provider codex", fr.gotArgv)
+	}
+}
+
+// TestRunComposition_NoProviderSelectedSendsNoFlag: the ordinary case. An
+// empty control is not "claude", it is "whatever the resolved profile
+// cascade declares" -- which is how the palette's direct Enter-on-a-binding
+// path lands on Codex for a binding whose content says so.
+func TestRunComposition_NoProviderSelectedSendsNoFlag(t *testing.T) {
+	fr := &fakeRunner{stdout: []byte(bootDirFixture)}
+	rec := &spawnRecorder{}
+	comp := compositionFromInput(CompositionInput{Target: "eng-nanite"}, "/bundle/root", t.TempDir())
+
+	if err := runComposition(context.Background(), comp, comp.BootRoot, fr.run, rec.spawn); err != nil {
+		t.Fatalf("runComposition: %v", err)
+	}
+	for _, a := range fr.gotArgv {
+		if a == "--provider" {
+			t.Fatalf("cairn argv %v carries --provider for an unset control", fr.gotArgv)
+		}
+	}
+}
+
+// TestLaunch_CodexLinksHomeResourcesBeforeSpawning covers the step Cairn
+// deliberately leaves to a launcher: pointing CODEX_HOME at a disposable
+// boot directory is only usable if the operator's own auth and hooks are
+// reachable from it. They must be there before the terminal opens, and they
+// must be links rather than copies.
+func TestLaunch_CodexLinksHomeResourcesBeforeSpawning(t *testing.T) {
+	root := t.TempDir()
+	sourceHome := filepath.Join(root, "codex-home")
+	bootDir := filepath.Join(root, "boot")
+	if err := os.MkdirAll(filepath.Join(sourceHome, "hooks"), 0o755); err != nil {
+		t.Fatalf("creating the source home: %v", err)
+	}
+	for _, name := range []string{"auth.json", "hooks.json"} {
+		if err := os.WriteFile(filepath.Join(sourceHome, name), []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("creating %s: %v", name, err)
+		}
+	}
+	if err := os.MkdirAll(bootDir, 0o755); err != nil {
+		t.Fatalf("creating the boot directory: %v", err)
+	}
+	t.Setenv("CODEX_HOME", sourceHome)
+
+	scope := t.TempDir()
+	fr := &fakeRunner{stdout: []byte(codexReport(bootDir, scope, `["auth.json", "hooks.json", "hooks"]`))}
+	rec := &spawnRecorder{}
+	b := binding.Binding{Name: "codex-coord-agent-setup", Profile: "orchestrator", Scope: scope}
+
+	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if !rec.called {
+		t.Fatal("spawn was not called")
+	}
+	for _, name := range []string{"auth.json", "hooks.json", "hooks"} {
+		info, err := os.Lstat(filepath.Join(bootDir, name))
+		if err != nil {
+			t.Fatalf("%s was not provided in the boot directory: %v", name, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s is not a link; live operator state must never be copied into a boot directory", name)
+		}
+	}
+	// And the environment that reaches the terminal points Codex at that
+	// directory, which is what makes the links matter at all.
+	if !reflect.DeepEqual(rec.env, []string{"CODEX_HOME=" + bootDir}) {
+		t.Fatalf("env = %v; want CODEX_HOME pointing at the boot directory", rec.env)
+	}
+}
+
+// TestLaunch_MissingHomeResourceRefusesAndSpawnsNothing is the decision this
+// increment made explicitly: rather than open a session whose hooks silently
+// do not run, the launch fails and says which path is missing. Nothing is
+// spawned, so there is no half-working terminal to notice later.
+func TestLaunch_MissingHomeResourceRefusesAndSpawnsNothing(t *testing.T) {
+	root := t.TempDir()
+	sourceHome := filepath.Join(root, "codex-home")
+	bootDir := filepath.Join(root, "boot")
+	if err := os.MkdirAll(sourceHome, 0o755); err != nil {
+		t.Fatalf("creating the source home: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceHome, "auth.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("creating auth.json: %v", err)
+	}
+	if err := os.MkdirAll(bootDir, 0o755); err != nil {
+		t.Fatalf("creating the boot directory: %v", err)
+	}
+	t.Setenv("CODEX_HOME", sourceHome)
+
+	scope := t.TempDir()
+	fr := &fakeRunner{stdout: []byte(codexReport(bootDir, scope, `["auth.json", "hooks.json"]`))}
+	rec := &spawnRecorder{}
+	b := binding.Binding{Name: "codex-coord-agent-setup", Profile: "orchestrator", Scope: scope}
+
+	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
+	if err == nil {
+		t.Fatal("launch opened a terminal without a resource cairn said the provider needs")
+	}
+	if !errors.Is(err, boot.ErrHomeResource) {
+		t.Errorf("error does not wrap boot.ErrHomeResource: %v", err)
+	}
+	if !strings.Contains(err.Error(), filepath.Join(sourceHome, "hooks.json")) {
+		t.Errorf("refusal does not name the missing path: %v", err)
+	}
+	if rec.called {
+		t.Fatal("spawn was called despite an unmet home resource")
+	}
+}
+
+// TestCompositionFromInput_ProviderPassesThroughUnmodified: the provider is
+// carried, never derived. Nothing in the mapping reads Target.
+func TestCompositionFromInput_ProviderPassesThroughUnmodified(t *testing.T) {
+	for _, provider := range []string{"", "codex", "claude", "opencode", "cluade"} {
+		comp := compositionFromInput(
+			CompositionInput{Target: "codex-coord-agent-setup", Provider: provider},
+			"/bundle/root", "/boot/root",
+		)
+		if comp.Provider != provider {
+			t.Errorf("compositionFromInput(provider %q).Provider = %q", provider, comp.Provider)
+		}
+	}
+}
+
+// TestBindingCarriesNoProviderFieldToSeedFrom is the structural half of "a
+// provider is never inferred," matching the skills and prompts guards
+// above: there is nothing in what internal/binding hands the frontend for a
+// compose form's provider control to seed itself from, so the control
+// starts empty because it has to, not because the JSX remembers to.
+func TestBindingCarriesNoProviderFieldToSeedFrom(t *testing.T) {
+	typ := reflect.TypeOf(binding.Binding{})
+	for i := 0; i < typ.NumField(); i++ {
+		if strings.Contains(strings.ToLower(typ.Field(i).Name), "provider") {
+			t.Fatalf("binding.Binding has a provider-ish field %q for a compose form to seed from", typ.Field(i).Name)
+		}
+	}
+}
+
+// argvHasPair reports whether argv carries flag immediately followed by
+// value -- checked as two adjacent elements, never as a substring of a
+// joined string.
+func argvHasPair(argv []string, flag, value string) bool {
+	for i, a := range argv {
+		if a == flag && i+1 < len(argv) && argv[i+1] == value {
+			return true
+		}
+	}
+	return false
 }

@@ -27,6 +27,7 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 	bundleFlag := fs.String("bundle", "", "bundle root to boot from (default: the app's own active bundle, same as bundle.DefaultRootStore resolves)")
 	bootRootFlag := fs.String("boot-root", "", "where boot directories are planted (default: internal/state.BootRoot(), never ~/dev/agent-os — see D9)")
 	scopeFlag := fs.String("scope", "", "override the binding's own scope (cairn boot --scope)")
+	providerFlag := fs.String("provider", "", "the harness to materialize into (cairn boot --provider); empty renders whatever the resolved profile declares")
 	cairnFlag := fs.String("cairn", "", "path to the cairn binary (default: internal/config's cairnPath, then PATH)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: tachyon [flags] <target>\n\n")
@@ -85,6 +86,7 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 		Bundle:   bundleRoot,
 		BootRoot: bootRoot,
 		Scope:    *scopeFlag,
+		Provider: *providerFlag,
 	}
 	runner := boot.ExecRunner(cairnPath)
 
@@ -137,13 +139,32 @@ func printReport(w io.Writer, cairnPath string, r Report) {
 	fmt.Fprintf(w, "  settings_path:   %s\n", derefOrNone(r.Result.SettingsPath))
 	fmt.Fprintf(w, "  cwd_preference:  %s\n", r.Result.CwdPreference)
 	fmt.Fprintf(w, "  project_dir_arg: %s\n", argvOrNone(r.Result.ProjectDirArg))
+	fmt.Fprintf(w, "  env_amendments:  %s\n", argvOrNone(r.Result.EnvAmendments))
+	fmt.Fprintf(w, "  home_resource_paths: %s\n", argvOrNone(r.Result.HomeResourcePaths))
 	if r.Result.BootDir != r.ExpectedBootDir {
 		fmt.Fprintf(w, "  WARNING: boot_dir does not match the expected boot directory above — boot.Key/CurrentPath has drifted from what cairn actually planted\n")
 	}
 	fmt.Fprintln(w)
 
-	fmt.Fprintf(w, "harness argv: %s\n", strings.Join(r.HarnessArgv, " "))
-	fmt.Fprintf(w, "--settings present: %v\n", argvHasFlag(r.HarnessArgv, "--settings"))
+	if r.HarnessArgvErr != nil {
+		fmt.Fprintf(w, "harness argv FAILED: %v\n", r.HarnessArgvErr)
+	} else {
+		fmt.Fprintf(w, "harness argv: %s\n", strings.Join(r.HarnessArgv, " "))
+		fmt.Fprintf(w, "--settings present: %v\n", argvHasFlag(r.HarnessArgv, "--settings"))
+	}
+
+	if r.EnvErr != nil {
+		fmt.Fprintf(w, "environment FAILED: %v\n", r.EnvErr)
+	} else {
+		fmt.Fprintf(w, "environment added to the terminal command: %s\n", argvOrNone(r.Env))
+	}
+
+	switch {
+	case r.ProviderHomeErr != nil:
+		fmt.Fprintf(w, "provider home FAILED: %v\n", r.ProviderHomeErr)
+	case r.ProviderHome != "":
+		fmt.Fprintf(w, "provider home resources would be linked from: %s\n", r.ProviderHome)
+	}
 }
 
 // derefOrNone renders one of Result's nil-able string fields: the string it
@@ -157,9 +178,10 @@ func derefOrNone(s *string) string {
 	return *s
 }
 
-// argvOrNone renders Result.ProjectDirArg: its tokens space-joined, or
-// "(none)" for a nil/empty slice — "this provider needs no such flag" per
-// internal/boot's doc.
+// argvOrNone renders one of Result's nil-able string-slice fields — its
+// elements space-joined, or "(none)" for a nil/empty slice, which is
+// Cairn's own spelling of an absent value (per internal/boot's doc on
+// ProjectDirArg, EnvAmendments and HomeResourcePaths).
 func argvOrNone(argv []string) string {
 	if len(argv) == 0 {
 		return "(none)"

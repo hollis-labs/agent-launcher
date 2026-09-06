@@ -530,3 +530,62 @@ func TestSweep_OnlyPrevPrefixedDirectoriesAreEverRemoved(t *testing.T) {
 		}
 	}
 }
+
+// TestSweep_NeverFollowsAProviderHomeLink is the safety property Codex
+// launches introduced (CW-20260906-0001): a boot directory now carries
+// symbolic links to the operator's live Codex credentials and hook
+// registrations (see [boot.PrepareHomeResources]), so the sweep that removes
+// old .prev-* directories must remove those LINKS and never what they point
+// at. os.RemoveAll unlinks rather than descends, which makes this true by
+// construction — this test is what keeps it true if the removal ever changes.
+//
+// It also covers the guard's own walk: lsof is invoked with +D over the
+// candidate's tree, and neither that nor anything else here may reach out of
+// the boot root and touch the operator's real home.
+func TestSweep_NeverFollowsAProviderHomeLink(t *testing.T) {
+	lsofPath := requireRealLsof(t)
+	root := t.TempDir()
+	prev := mkPrev(t, root, "codex-coord-agent-setup", "20260906T000000.000000000Z")
+
+	// Stand in for the operator's real ~/.codex, well outside the boot root.
+	sourceHome := t.TempDir()
+	auth := filepath.Join(sourceHome, "auth.json")
+	hooksDir := filepath.Join(sourceHome, "hooks")
+	hookScript := filepath.Join(hooksDir, "session-start.sh")
+	if err := os.WriteFile(auth, []byte(`{"token":"redacted"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("creating the source auth.json: %v", err)
+	}
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatalf("creating the source hooks dir: %v", err)
+	}
+	if err := os.WriteFile(hookScript, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("creating the source hook: %v", err)
+	}
+
+	for _, link := range []struct{ target, name string }{
+		{target: auth, name: "auth.json"},
+		{target: hooksDir, name: "hooks"},
+	} {
+		if err := os.Symlink(link.target, filepath.Join(prev, link.name)); err != nil {
+			t.Fatalf("linking %s into the old boot directory: %v", link.name, err)
+		}
+	}
+
+	report := waitUntilSwept(t, func() boot.Report {
+		r, err := boot.Sweep(context.Background(), root, boot.ExecLsofRunner(lsofPath))
+		if err != nil {
+			t.Fatalf("Sweep: %v", err)
+		}
+		return r
+	}, prev)
+
+	if !report.GuardOK {
+		t.Fatalf("report.GuardOK = false; want true: %s", report.GuardDetail)
+	}
+	mustNotExist(t, prev)
+
+	// The whole point: the links went, the operator's own files did not.
+	mustExist(t, auth)
+	mustExist(t, hooksDir)
+	mustExist(t, hookScript)
+}

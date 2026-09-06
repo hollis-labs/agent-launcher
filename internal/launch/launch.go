@@ -64,13 +64,21 @@ import (
 )
 
 // harnessBinary maps a [boot.Result.Provider] value to the binary
-// SpawnITerm2 actually execs. "claude" is the only provider Cairn's own
-// --json contract documents today (internal/boot/invoke.go's doc on
-// Provider); this is a lookup table, not a plugin system -- a second
-// provider is a second map entry, not a new code path through this
-// package.
+// SpawnITerm2 actually execs: the two providers Cairn renders a boot
+// directory for. This is a lookup table, not a plugin system -- adding
+// Codex was a second entry here and a second case in [boot.HarnessArgv],
+// with no new code path through this package, which is what Cairn's
+// self-describing --json report was for.
+//
+// The value is a bare command name, resolved by the interactive shell
+// iTerm2 opens rather than by this process. That is deliberate and unlike
+// cairn, which internal/config resolves to an absolute path because a
+// launchd-started Tachyon has no useful PATH of its own: the harness is not
+// run by Tachyon at all, but by a login shell that has already sourced the
+// operator's profile, so the name is what a person would type.
 var harnessBinary = map[string]string{
-	"claude": "claude",
+	boot.ProviderClaude: "claude",
+	boot.ProviderCodex:  "codex",
 }
 
 // Service is bound to the frontend as a Wails service: the palette's
@@ -192,6 +200,28 @@ type CompositionInput struct {
 	// it anyway.
 	Prompts []string `json:"prompts"`
 
+	// Provider is the harness this one launch materializes into, chosen
+	// explicitly in the compose form. Empty -- the ordinary case -- sends no
+	// --provider at all and lets Cairn render whatever the resolved profile
+	// cascade declares, which is exactly what `cairn boot <target>` does on
+	// its own.
+	//
+	// It is never inferred. Nothing in this package, or in
+	// internal/compose, reads Target to guess a provider from it: a binding
+	// called "codex-coord-agent-setup" says nothing about a harness, and a
+	// launcher that read one out of the name would render a Codex layout
+	// the first time somebody named a binding after a project rather than a
+	// tool. A binding that should boot Codex says so in the content it
+	// resolves -- its profile cascade or one of its parts declaring
+	// `provider: codex` -- which is also what makes the palette's direct
+	// Enter-on-a-binding path (see [Service.Launch], which builds no
+	// CompositionInput at all) land on the right harness without a form.
+	//
+	// A value naming no harness Cairn knows is refused by Cairn, with a
+	// diagnostic listing what it does know. This package keeps no second
+	// list to disagree with that one (D8).
+	Provider string `json:"provider"`
+
 	// Scope overrides the target's own scope. Empty leaves the target's
 	// resolved scope in force -- no --scope is sent at all, the same
 	// choice [launch] already makes for the plain Launch(name) path (see
@@ -277,6 +307,7 @@ func compositionFromInput(input CompositionInput, bundleRoot, bootRoot string) c
 	return compose.Composition{
 		Target:   input.Target,
 		Bundle:   bundleRoot,
+		Provider: input.Provider,
 		BootRoot: bootRoot,
 		Skills:   input.Skills,
 		Prompts:  input.Prompts,
@@ -306,9 +337,10 @@ func (s *Service) resolveBinding(name string) (binding.Binding, string, error) {
 }
 
 // spawnFunc matches [boot.SpawnITerm2]'s signature -- the seam
-// launch_test.go substitutes a fake for, so tests assert on the argv and
-// cwd that reach the spawn step without ever invoking osascript.
-type spawnFunc func(argv []string, cwd string) error
+// launch_test.go substitutes a fake for, so tests assert on the argv, cwd
+// and environment that reach the spawn step without ever invoking
+// osascript.
+type spawnFunc func(argv []string, cwd string, env []string) error
 
 // launch is Launch's orchestration body once a binding is in hand: build
 // the minimal composition [Service.Launch] has always built (Target,
@@ -351,14 +383,36 @@ func launch(ctx context.Context, b binding.Binding, bundleRoot, bootRoot string,
 // Launch(name), a minimal Composition) and [Service.LaunchComposition]
 // (the palette's full compose form): clear whatever might already be
 // planted at comp.Target's boot directory, build the argv
-// (internal/compose.Build), run cairn (internal/boot.Invoke), resolve a
-// cwd from what it reported, prepend the harness binary
-// [harnessBinary] maps Provider to, and spawn. Neither caller duplicates
-// any of this -- see this package's own doc for why that matters for the
-// skills-additive-only guarantee in particular: there being exactly one
-// place that turns a Composition into a running terminal is what makes
-// "nothing here computes a skills union" a property of the whole package,
-// not just of whichever caller happened to be audited.
+// (internal/compose.Build), run cairn (internal/boot.Invoke), then act on
+// the report it printed -- resolve a cwd, build the provider's own flags
+// (internal/boot.HarnessArgv), prepend the harness binary [harnessBinary]
+// maps Provider to, provide the operator-owned resources Cairn named but
+// deliberately did not render (internal/boot.PrepareHomeResources), expand
+// the provider's environment amendments (internal/boot.Environment) -- and
+// spawn. Neither caller duplicates any of this -- see this package's own doc
+// for why that matters for the skills-additive-only guarantee in particular:
+// there being exactly one place that turns a Composition into a running
+// terminal is what makes "nothing here computes a skills union" a property
+// of the whole package, not just of whichever caller happened to be audited.
+//
+// # Every provider difference is data, read from one report
+//
+// There is no branch on Provider anywhere in this function. A Codex launch
+// and a Claude launch run the identical sequence; what differs is what
+// Cairn's report says -- which flags the harness takes, which environment
+// it needs, which operator-owned resources must be in place first -- and
+// each of those is a call into internal/boot with the report as its whole
+// input. That is why adding Codex added no code path here, and it is the
+// property to preserve: a `switch result.Provider` in this function would
+// be the first place a third provider costs more than a table entry.
+//
+// # Nothing is spawned until everything is ready
+//
+// Every failure below returns before spawn, so a launch that cannot be
+// completed opens no terminal at all rather than one missing its
+// credentials, its hooks or its environment. The boot directory Cairn just
+// planted is left where it is: the next launch of the same target moves it
+// aside (see boot.Prepare) rather than colliding with it.
 //
 // comp.Target is always used as [boot.Key]'s seed, unmodified. It may be a
 // saved binding name or, for a bindingless composition, a bare profile id;
@@ -401,9 +455,36 @@ func runComposition(ctx context.Context, comp compose.Composition, bootRoot stri
 	if !ok {
 		return fmt.Errorf("launch: no harness binary known for provider %q", result.Provider)
 	}
-	fullArgv := append([]string{binary}, boot.HarnessArgv(result)...)
+	flags, err := boot.HarnessArgv(result)
+	if err != nil {
+		return err
+	}
+	fullArgv := append([]string{binary}, flags...)
 
-	return spawn(fullArgv, cwd)
+	// The source home is resolved from the environment as it stands, before
+	// anything computes the amended one below. Doing it the other way round
+	// -- reading CODEX_HOME after deciding it should be the boot directory
+	// -- links every operator-owned resource to itself. boot.PrepareHomeResources
+	// refuses that outcome as well, but the ordering here is what makes it
+	// never arise.
+	homeKey, err := boot.HomeRedirectKey(result)
+	if err != nil {
+		return err
+	}
+	sourceHome, err := boot.ResolveHome(homeKey)
+	if err != nil {
+		return err
+	}
+	if _, err := boot.PrepareHomeResources(result, sourceHome); err != nil {
+		return err
+	}
+
+	env, err := boot.Environment(result)
+	if err != nil {
+		return err
+	}
+
+	return spawn(fullArgv, cwd, env)
 }
 
 // resolveCwd turns result.CwdPreference into the working directory

@@ -8,6 +8,16 @@ import {
   createCompositionDraft,
 } from "./compositionDraft.js";
 
+// The providers Cairn renders a boot directory for. Suggestions only:
+// this is a datalist and not a restricted dropdown because Cairn owns
+// provider validation and distinguishes "a provider cairn cannot render
+// yet" from "not a provider at all" — two refusals a restricted control
+// would collapse into one. Drift here costs an autocomplete entry,
+// never a refused launch. (D8; the literal tag name is spelled out
+// nowhere in this file because TestPaletteBindinglessCompositionContract
+// greps the whole source for it.)
+const PROVIDER_SUGGESTIONS = Object.freeze(["claude", "codex"]);
+
 // The palette lists the active bundle's bindings, filterable by name, and
 // lets the user move a selection over them with the mouse or the arrow
 // keys. The compose form has two explicit target modes: additions layered
@@ -114,6 +124,7 @@ export default function Palette() {
     skillDraft,
     prompts,
     promptDraft,
+    provider,
     scope,
     parts,
     partDraft,
@@ -136,6 +147,7 @@ export default function Palette() {
   const setBaseProfile = (value) => dispatchComposition({ type: "SET_TARGET_DRAFT", value });
   const setSkillDraft = (value) => updateCompositionField("skillDraft", value);
   const setPromptDraft = (value) => updateCompositionField("promptDraft", value);
+  const setProvider = (value) => updateCompositionField("provider", value);
   const setScope = (value) => updateCompositionField("scope", value);
   const setPartDraft = (value) => updateCompositionField("partDraft", value);
   const setSetSlotDraft = (value) => updateCompositionField("setSlotDraft", value);
@@ -507,6 +519,8 @@ export default function Palette() {
           setPromptDraft={setPromptDraft}
           addPrompts={addPrompts}
           removePrompt={removePrompt}
+          provider={provider}
+          setProvider={setProvider}
           scope={scope}
           setScope={setScope}
           parts={parts}
@@ -552,9 +566,9 @@ export default function Palette() {
 // ComposeSection is the compose form itself: a bare-profile target when T33
 // mode is active, followed by one control per Cairn flag (T08,
 // CW-20260903-0012; prompts added by CW-20260904-0006). It follows T32's
-// profile -> ordered parts -> additive skills/prompts -> sets -> scope
-// resolution stack. Parts can be reordered because each becomes an ordered
-// --with flag. Skills and prompts stay additive-only; their chip order is
+// profile -> ordered parts -> additive skills/prompts -> sets -> provider
+// -> scope resolution stack. Parts can be reordered because each becomes
+// an ordered --with flag. Skills and prompts stay additive-only; their chip order is
 // insertion order, never an inherited selection. There is deliberately no
 // template control — template choice is authoring-time only (D4) and
 // contributes nothing to a composition.
@@ -585,6 +599,8 @@ function ComposeSection(props) {
     setPromptDraft,
     addPrompts,
     removePrompt,
+    provider,
+    setProvider,
     scope,
     setScope,
     parts,
@@ -606,6 +622,11 @@ function ComposeSection(props) {
     clearComposition,
     discardComposition,
   } = props;
+
+  // Unlike every other suggestion list here, this one is not a census of the
+  // active bundle: it is the fixed pair Cairn renders a boot directory for.
+  // See PROVIDER_SUGGESTIONS above for why it stays a suggestion.
+  const providerSuggestions = PROVIDER_SUGGESTIONS;
 
   const modalRef = useRef(null);
   const trapModalTab = (event) => {
@@ -902,6 +923,36 @@ function ComposeSection(props) {
             ))}
           </div>
         ) : null}
+      </div>
+
+      {/* Provider maps directly to --provider, and empty means the flag is
+          never sent at all — the resolved profile's own declaration decides,
+          which is the ordinary case. Free text with a datalist, never a
+          restricted dropdown: Cairn validates, and it refuses "a provider
+          cairn cannot render yet" and "not a provider at all" differently —
+          a restricted control would erase that distinction (D8). */}
+      <div className="compose-field">
+        <label htmlFor="compose-provider-input">
+          Provider (--provider) <span className="muted">(defaults to the profile's own — suggestions only, free text works)</span>
+        </label>
+        <input
+          id="compose-provider-input"
+          list="compose-provider-suggestions"
+          placeholder="profile default"
+          spellCheck={false}
+          value={provider}
+          onChange={(e) => setProvider(e.target.value)}
+          onKeyDown={(e) => {
+            if (acceptTopSuggestion(e, provider, providerSuggestions, setProvider)) return;
+            if (e.key === "Enter") {
+              e.preventDefault();
+              attemptLaunch();
+            }
+          }}
+        />
+        <datalist id="compose-provider-suggestions">
+          {providerSuggestions.map((name) => <option key={name} value={name} />)}
+        </datalist>
       </div>
 
       {/* Scope maps directly to --scope. Project names never cross the

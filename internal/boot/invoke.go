@@ -10,6 +10,17 @@ import (
 	"strings"
 )
 
+// The providers Tachyon knows how to launch. They are the values Cairn's
+// own --json report puts in provider, and the only two bootdir.LayoutFor
+// renders a directory for. A third is a third case in [HarnessArgv] and a
+// third entry in internal/launch's harnessBinary map — not a new code path.
+const (
+	// ProviderClaude is Claude Code.
+	ProviderClaude = "claude"
+	// ProviderCodex is the Codex CLI.
+	ProviderCodex = "codex"
+)
+
 // ProjectDirPlaceholder is the token Cairn's --json report leaves standing
 // in project_dir_arg wherever the scope goes — see [Result.ProjectDirArgv]
 // and [ProjectDirArgv]. Named to match cairn's own
@@ -20,8 +31,11 @@ const ProjectDirPlaceholder = "{{.ProjectDir}}"
 // launcher needs to open the directory Cairn just planted and build the
 // harness's argv, without reading any file inside that directory to find
 // out. It mirrors Cairn's own bootReport (cmd/cairn/bootjson.go in the
-// cairn repo, and examples/README.md §5) key for key — six keys, flat,
-// snake_case, every one of them present on every successful boot.
+// cairn repo, and examples/README.md §5): flat, snake_case, every key
+// present on every successful boot. Cairn's contract is that new keys are
+// free and a rename is breaking, so this struct names the keys Tachyon
+// reads and silently ignores the ones it does not (saved_binding_path and
+// saved_dropped_sets describe a --save-as this launcher never passes).
 //
 // Scope, SettingsPath and ProjectDirArg are nil-able (a pointer or a nil
 // slice) because Cairn's own contract makes null meaningful and distinct
@@ -38,9 +52,11 @@ type Result struct {
 	// BootDir is the directory Cairn just planted, absolute.
 	BootDir string `json:"boot_dir"`
 
-	// Provider is the harness the directory was rendered for — "claude"
-	// today. Cairn's own contract for a second provider (Codex) requires
-	// no change here, only a different value.
+	// Provider is the harness the directory was rendered for:
+	// [ProviderClaude] or [ProviderCodex], the two Cairn renders a layout
+	// for. Cairn's own contract held — a second provider needed no change
+	// to this field, only a different value in it — and [HarnessArgv] is
+	// where that value is turned into a command line.
 	Provider string `json:"provider"`
 
 	// Scope is the directory the instance works in, absolute and
@@ -70,6 +86,29 @@ type Result struct {
 	// field; nothing in this package hardcodes "--add-dir". See
 	// [Result.ProjectDirArgv] and [ProjectDirArgv].
 	ProjectDirArg []string `json:"project_dir_arg"`
+
+	// EnvAmendments are the provider-declared KEY=VALUE entries a launcher
+	// must add to the environment of the process it spawns, with Cairn's
+	// own placeholders ([BootDirPlaceholder], [ProjectDirPlaceholder]) left
+	// standing for the launcher to substitute at spawn time — exactly the
+	// same split-there/substitute-here division ProjectDirArg follows. nil
+	// when the provider declares none, which is Claude Code's case;
+	// Codex declares one, "CODEX_HOME={{.BootDir}}". [Environment] performs
+	// the substitution; internal/boot.SpawnITerm2 puts the result in front
+	// of the command the terminal actually runs.
+	EnvAmendments []string `json:"env_amendments"`
+
+	// HomeResourcePaths are provider-home-relative resources Cairn
+	// deliberately does not render into the boot directory, but that a
+	// launcher pointing the provider's home at that directory (which is
+	// what following EnvAmendments does) must provide before launching.
+	// nil when Cairn knows of none. Codex reports auth.json, hooks.json and
+	// hooks: live credentials and live hook registrations, which Cairn
+	// refuses to copy into a disposable directory because copying them
+	// would make Cairn the owner of operator state. [PrepareHomeResources]
+	// is where Tachyon carries that ownership boundary rather than erasing
+	// it — it links, and never copies.
+	HomeResourcePaths []string `json:"home_resource_paths"`
 }
 
 // ProjectDirArgv substitutes projectDir into every token of tokens and
@@ -113,15 +152,16 @@ func ProjectDirArgv(tokens []string, projectDir string) []string {
 // well-formed but meaningless flag, and Cairn's own contract already has a
 // way to say "nothing to grant": Scope being nil.
 //
-// [HarnessArgv] does not call this method today: the human gate on
-// spec.access.directories settled that this flag is redundant for any
-// launcher that always passes --settings, which Tachyon's does (see
-// CW-20260518-0061 hazard 2, and CW-20260903-0014's corrected section).
-// It is exported and tested on its own because Cairn's contract exists so
-// a second provider (Codex) works without a second code path in Tachyon —
-// a future caller that needs this flag for a provider without a
-// settings-based access grant has it ready here, proven correct
-// independently of whether Claude Code's own launch path ever calls it.
+// [HarnessArgv] calls this for Codex and not for Claude Code. The human
+// gate on spec.access.directories settled that the flag is redundant for
+// any launcher that always passes --settings, which Tachyon's Claude path
+// does (see CW-20260518-0061 hazard 2, and CW-20260903-0014's corrected
+// section). Codex has no --settings to carry the grant, so the flag is how
+// its scope is granted at all. This method was exported and tested on its
+// own before either caller existed, on the bet that Cairn's contract would
+// let a second provider work without a second code path in Tachyon; that
+// is what happened — the Codex branch of HarnessArgv is one call to this,
+// and it hardcodes no flag name.
 func (r Result) ProjectDirArgv() []string {
 	if r.Scope == nil {
 		return nil
@@ -129,31 +169,64 @@ func (r Result) ProjectDirArgv() []string {
 	return ProjectDirArgv(r.ProjectDirArg, *r.Scope)
 }
 
-// HarnessArgv builds the argv Tachyon spawns the harness (Claude Code)
-// with, from one Result. Spawning itself is a later task (T12,
-// CW-20260903-0016); this returns the argv and nothing else.
+// HarnessArgv builds the flags Tachyon spawns result.Provider's harness
+// with, from one Result. It returns the flags only — the binary name is
+// internal/launch's to prepend, and spawning is internal/boot.SpawnITerm2's
+// to do.
 //
-// --settings <BootDir>/.claude/settings.json is unconditional, permanent,
-// and computed directly from result.BootDir joined with the fixed
-// ".claude/settings.json" relative path — never read from
-// Result.SettingsPath, which Cairn's own contract allows to be nil. A
-// settings.json merely sitting in the boot directory is read as the
-// untrusted "projectSettings" tier and defaultMode: auto is silently
-// refused there; passing --settings is what promotes it to the trusted
-// "flagSettings" tier, which is what makes Tachyon's auto mode survive at
-// all. No future task may drop this flag — see
-// TestHarnessArgv_AlwaysIncludesSettingsFlag, a permanent regression
-// guard, and CW-20260903-0014's hazard section for the full argument.
+// A provider this function has no argv for is a returned error naming it,
+// never an empty argv. Launching the wrong harness's command line, or a
+// bare `claude` with no flags at all, is the failure this refusal exists to
+// prevent: a Codex boot directory opened by Claude Code with no --settings
+// is a session that starts, looks fine, and carries none of what was
+// planted.
 //
-// The provider's project-dir flag (ProjectDirArg — "--add-dir" for Claude
-// Code) is deliberately never added here: the human gate on
-// spec.access.directories settled that it is redundant for any launcher
-// that always passes --settings, and this one does. See
-// [Result.ProjectDirArgv] for where that substitution still lives, tested
-// on its own, for a provider that would actually need it.
-func HarnessArgv(result Result) []string {
-	settingsPath := filepath.Join(result.BootDir, ".claude", "settings.json")
-	return []string{"--settings", settingsPath}
+// # Claude Code: --settings, unconditional and permanent
+//
+// --settings <BootDir>/.claude/settings.json is computed directly from
+// result.BootDir joined with the fixed ".claude/settings.json" relative
+// path — never read from Result.SettingsPath, which Cairn's own contract
+// allows to be nil. A settings.json merely sitting in the boot directory is
+// read as the untrusted "projectSettings" tier and defaultMode: auto is
+// silently refused there; passing --settings is what promotes it to the
+// trusted "flagSettings" tier, which is what makes Tachyon's auto mode
+// survive at all. No future task may drop this flag — see
+// TestHarnessArgv_AlwaysIncludesSettingsFlag, a permanent regression guard,
+// and CW-20260903-0014's hazard section for the full argument. Adding Codex
+// did not weaken it: the Claude branch below is byte-for-byte what this
+// function returned when it had no branches.
+//
+// Claude Code deliberately gets no project-dir flag (--add-dir): the human
+// gate on spec.access.directories settled that it is redundant for any
+// launcher that always passes --settings, and this one does.
+//
+// # Codex: the project-dir flag, and nothing else
+//
+// Codex has no --settings equivalent — Cairn renders its settings into
+// config.toml inside the boot directory, which Codex reads because
+// CODEX_HOME points there ([Environment]) — so the access grant that
+// --settings carries for Claude Code has to be made on the command line
+// instead. That is exactly what Cairn's project_dir_arg is for, and this
+// branch is [Result.ProjectDirArgv] and nothing more: the flag's own
+// spelling is read from the report, never hardcoded here, and a boot with
+// no scope produces no flag rather than a flag granting "".
+//
+// What must never appear here is --skip-git-repo-check. The installed CLI
+// rejects it outright on an interactive launch; it is a `codex exec` flag,
+// needed there because a boot directory is not a git repository. Copying it
+// out of a non-interactive probe recipe into this argv turns every Codex
+// launch into an immediate usage error — see
+// TestHarnessArgv_CodexNeverEmitsTheExecOnlyFlag.
+func HarnessArgv(result Result) ([]string, error) {
+	switch result.Provider {
+	case ProviderClaude:
+		settingsPath := filepath.Join(result.BootDir, ".claude", "settings.json")
+		return []string{"--settings", settingsPath}, nil
+	case ProviderCodex:
+		return result.ProjectDirArgv(), nil
+	default:
+		return nil, fmt.Errorf("boot: no harness argv known for provider %q", result.Provider)
+	}
 }
 
 // Runner is the smallest seam this package needs to actually run

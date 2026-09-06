@@ -22,18 +22,36 @@
 // subprocess anywhere in this design. [Result] decodes Cairn's six-key
 // --json contract; [HarnessArgv] builds the harness's launch argv from it.
 //
-// Two decisions there are permanent, not incidental: [HarnessArgv] always
-// includes --settings <BootDir>/.claude/settings.json (dropping it
-// silently downgrades defaultMode: auto — see CW-20260903-0014's hazard
-// section), and it never includes the provider's project-dir flag
-// (--add-dir for Claude Code) — redundant once --settings is always
-// passed, per the access.directories human gate. Cairn's stderr is always
+// Two decisions there are permanent, not incidental: every CLAUDE launch's
+// [HarnessArgv] includes --settings <BootDir>/.claude/settings.json
+// (dropping it silently downgrades defaultMode: auto — see
+// CW-20260903-0014's hazard section), and a Claude launch never includes the
+// provider's project-dir flag (--add-dir) — redundant once --settings is
+// always passed, per the access.directories human gate. Cairn's stderr is always
 // returned, never treated as a failure signal on its own; a non-zero exit
 // is reported as an [*InvokeError] carrying that stderr, not a generic
 // failure. Nothing here scrapes AGENTS.md, and nothing here reaches for a
 // boot root itself — that stays exactly what internal/state (T22) and
 // internal/compose (T08) already made it: a value a caller computes and
 // passes in.
+//
+// # A second provider (CW-20260906-0001)
+//
+// Codex launches added no new step to this package's shape, only new
+// content in Cairn's report to act on. [HarnessArgv] gained a second case:
+// Codex has no --settings, so the access grant Claude Code gets through that
+// flag is made on the command line instead, out of the report's own
+// project_dir_arg. [Environment] expands the provider's env_amendments
+// ("CODEX_HOME={{.BootDir}}") so [SpawnITerm2] can put them in front of the
+// command the terminal actually runs — not on the osascript process, whose
+// environment reaches nothing. [PrepareHomeResources] provides the
+// operator-owned resources Cairn names but deliberately does not render
+// (auth.json, hooks.json, hooks), as LINKS into the operator's own provider
+// home, so a disposable boot directory never becomes a second owner of live
+// credentials. That last part is why this package's standing refusal to
+// delete anything but a .prev-* directory matters more than it did: those
+// links point at the operator's real home, and os.RemoveAll unlinks rather
+// than descends — see TestSweep_NeverFollowsAProviderHomeLink.
 //
 // # Why a stable directory at all
 //

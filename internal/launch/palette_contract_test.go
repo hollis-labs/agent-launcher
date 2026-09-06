@@ -45,6 +45,13 @@ func TestPaletteBindinglessCompositionContract(t *testing.T) {
 		`dispatchComposition({ type: "HIDE" })`,
 		`acceptTopSuggestion(e, scope, suggestions, setScope)`,
 		`Launch only — this palette never writes a binding.`,
+		// CW-20260906-0001: the provider control. Datalist-backed like every
+		// other control here, for the reason the guard below states.
+		`id="compose-provider-input"`,
+		`list="compose-provider-suggestions"`,
+		`Provider (--provider)`,
+		`acceptTopSuggestion(e, provider, providerSuggestions, setProvider)`,
+		`const setProvider = (value) => updateCompositionField("provider", value);`,
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("Palette.jsx is missing T33 contract fragment %q", required)
@@ -95,6 +102,13 @@ func TestPaletteAdditionsRemainUserOwned(t *testing.T) {
 		`skills: profile.`,
 		`prompts: binding.`,
 		`prompts: profile.`,
+		// The provider is chosen, never derived. A control seeded from the
+		// target's own name would render a Codex layout the first time
+		// somebody named a binding after a project rather than a tool.
+		`provider: binding.`,
+		`provider: profile.`,
+		`startsWith("codex`,
+		`startsWith('codex`,
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("Palette.jsx contains inherited-addition path %q", forbidden)

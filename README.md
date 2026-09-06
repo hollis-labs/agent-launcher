@@ -88,7 +88,19 @@ sweep on demand. A saved edit is immediately available to the next Cairn
 preview or launch because both read the same active bundle directly.
 
 Summoning the palette can launch either a saved binding or an unsaved
-composition through Cairn into an iTerm2 session. Composition drafts survive
+composition through Cairn into an iTerm2 session, for either harness Cairn
+renders a boot directory for. Claude Code launches carry
+`--settings <bootdir>/.claude/settings.json`, permanently. Codex launches run
+from the boot directory with `CODEX_HOME` pointing at it and the real project
+granted through `--add-dir`, and the operator-owned resources Cairn names
+(`auth.json`, `hooks.json`, `hooks`) are linked in from the operator's own
+Codex home before the terminal opens — links, never copies, so Tachyon never
+becomes a second owner of live credentials, and a missing one refuses the
+launch instead of opening a session whose hooks quietly do not run. Codex's
+first launch of a boot directory asks to trust its hooks; that prompt is the
+operator's, and nothing here bypasses it. Which harness a launch materializes
+into comes from the profile cascade, or from the palette's own Provider
+control — never from a binding's name. Composition drafts survive
 ordinary palette dismissal until they are launched or explicitly discarded.
 Boot directories have stable current paths; a relaunch moves the old directory
 aside, and the guarded startup/manual sweep removes only eligible `.prev-*`

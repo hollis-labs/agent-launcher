@@ -28,6 +28,10 @@
 //	                     — a name, never a prompt's own content; see
 //	                     "no delivery" below
 //	project / path       --scope <path>
+//	provider             --provider <name>, omitted entirely when the
+//	                     control is empty — which is the ordinary case
+//	                     and means "whatever the resolved profile
+//	                     cascade declares" (CW-20260906-0001)
 //	one-off direction    --set <slot>=<value>, one flag per Set
 //	additional parts     --with <name>, one flag per part
 //	template             nothing — authoring-time only (D4); there
@@ -37,8 +41,8 @@
 // --boot-root, in the fixed order the target contract specifies:
 //
 //	boot <target> --profile <bundle> --boot-root <root> --session current
-//	     [--with <part>]... [--skill <a,b,c>] [--prompt <a,b,c>]
-//	     [--set <slot>=<value>]... [--scope <path>] --json
+//	     [--provider <name>] [--with <part>]... [--skill <a,b,c>]
+//	     [--prompt <a,b,c>] [--set <slot>=<value>]... [--scope <path>] --json
 //
 // --session current and --json are unconditional — every invocation this
 // package builds carries both, with no Composition field controlling either
@@ -55,6 +59,25 @@
 // deduplicate anything a caller handed it (D8's shape and existence
 // spirit — the caller owns what a value means, this package owns only
 // where it lands in argv).
+//
+// # A provider is a target, never an inference (CW-20260906-0001)
+//
+// Composition.Provider is the harness one launch materializes into, and it
+// arrives from a control a person set — nothing in this package derives it.
+// In particular nothing reads Target to guess one: a binding named
+// "codex-coord-agent-setup" says nothing about a harness, and a launcher
+// that read one out of a name would render a Codex layout the first time
+// somebody named a binding after a project rather than a tool, silently. A
+// binding that should boot Codex says so in the content it resolves — its
+// own profile cascade, or a part declaring `provider: codex` — which is
+// also how the palette's direct Enter-on-a-binding path, which builds no
+// Composition beyond Target/Bundle/BootRoot, lands on the right harness.
+// See TestProviderIsNeverInferredFromTheTarget.
+//
+// The value is not validated here either (D8). Cairn refuses a word that
+// names no harness it knows, and distinguishes that from a harness it knows
+// and cannot yet render — two different answers a second list in this
+// package could only disagree with.
 //
 // # No delivery (CW-20260904-0006)
 //

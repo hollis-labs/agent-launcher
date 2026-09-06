@@ -22,6 +22,7 @@ function populatedBindingDraft(target = "binding-a") {
     { type: "ADD_SET", value: { slot: "tone", value: "terse" } },
     { type: "UPDATE_FIELD", field: "setSlotDraft", value: "model" },
     { type: "UPDATE_FIELD", field: "setValueDraft", value: "fast" },
+    { type: "UPDATE_FIELD", field: "provider", value: " codex " },
     { type: "UPDATE_FIELD", field: "scope", value: " /work/tachyon " },
   );
 }
@@ -37,6 +38,7 @@ test("passive hide retains every field, modal mode, and captured binding", () =>
     target: "binding-a",
     skills: ["commit", "push"],
     prompts: ["report"],
+    provider: "codex",
     scope: "/work/tachyon",
     sets: [{ slot: "tone", value: "terse" }],
     parts: ["reviewer"],
@@ -85,6 +87,34 @@ test("one-time profile becomes immutable only after explicit capture", () => {
   assert.equal(compositionInput(retained).scope, "/work/one-time");
 });
 
+test("provider is an untouched-by-default override that is trimmed on the way out", () => {
+  const untouched = compositionDraftReducer(createCompositionDraft(), {
+    type: "OPEN_BINDING",
+    target: "binding-a",
+  });
+  assert.equal(untouched.provider, "");
+  // The empty string is the ordinary case, not a missing value: it means
+  // Tachyon sends no --provider flag at all and the resolved profile
+  // cascade picks the harness.
+  assert.equal(compositionInput(untouched).provider, "");
+
+  const chosen = compositionDraftReducer(
+    { ...untouched, launchError: "cairn refused the composition" },
+    { type: "UPDATE_FIELD", field: "provider", value: "  codex  " },
+  );
+  assert.equal(chosen.provider, "  codex  ");
+  assert.equal(chosen.launchError, "");
+  assert.equal(compositionInput(chosen).provider, "codex");
+
+  // Free text reaches Cairn unchanged; only Cairn decides what a provider is.
+  const unknown = compositionDraftReducer(untouched, {
+    type: "UPDATE_FIELD",
+    field: "provider",
+    value: "opencode",
+  });
+  assert.equal(compositionInput(unknown).provider, "opencode");
+});
+
 test("Clear removes every override and pending input but preserves target and mode", () => {
   const before = compositionDraftReducer(populatedBindingDraft(), { type: "HIDE" });
   const cleared = compositionDraftReducer(before, { type: "CLEAR" });
@@ -98,12 +128,13 @@ test("Clear removes every override and pending input but preserves target and mo
     target: "binding-a",
     skills: [],
     prompts: [],
+    provider: "",
     scope: "",
     sets: [],
     parts: [],
   });
   for (const field of [
-    "skillDraft", "promptDraft", "scope", "partDraft", "setSlotDraft", "setValueDraft",
+    "skillDraft", "promptDraft", "provider", "scope", "partDraft", "setSlotDraft", "setValueDraft",
   ]) assert.equal(cleared[field], "", `${field} should be cleared`);
 });
 

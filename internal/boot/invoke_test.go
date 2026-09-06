@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -293,6 +294,7 @@ func TestHarnessArgv_AlwaysIncludesSettingsFlag(t *testing.T) {
 			name: "ordinary result with a non-nil settings path",
 			result: boot.Result{
 				BootDir:      "/state/boot/eng-nanite/current",
+				Provider:     boot.ProviderClaude,
 				SettingsPath: strPtr("/state/boot/eng-nanite/current/.claude/settings.json"),
 			},
 		},
@@ -300,6 +302,7 @@ func TestHarnessArgv_AlwaysIncludesSettingsFlag(t *testing.T) {
 			name: "SettingsPath nil -- HarnessArgv must not read it, and must still emit --settings",
 			result: boot.Result{
 				BootDir:      "/state/boot/bare-profile/current",
+				Provider:     boot.ProviderClaude,
 				SettingsPath: nil,
 			},
 		},
@@ -307,15 +310,26 @@ func TestHarnessArgv_AlwaysIncludesSettingsFlag(t *testing.T) {
 			name: "scope and project dir arg present too",
 			result: boot.Result{
 				BootDir:       "/state/boot/scoped/current",
+				Provider:      boot.ProviderClaude,
 				Scope:         strPtr("/Users/chrispian/dev/projects/agent-setup"),
 				ProjectDirArg: []string{"--add-dir", boot.ProjectDirPlaceholder},
 			},
+		},
+		{
+			// The whole report a real `cairn boot coord-agent-setup` printed,
+			// decoded -- so the guard covers the actual document and not only
+			// hand-built fragments of it.
+			name:   "the real captured claude report",
+			result: mustDecode(t, realClaudeBootReportFixture),
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			argv := boot.HarnessArgv(tc.result)
+			argv, err := boot.HarnessArgv(tc.result)
+			if err != nil {
+				t.Fatalf("HarnessArgv(%+v): %v", tc.result, err)
+			}
 			want := filepath.Join(tc.result.BootDir, ".claude", "settings.json")
 
 			found := false
@@ -345,10 +359,14 @@ func TestHarnessArgv_AlwaysIncludesSettingsFlag(t *testing.T) {
 func TestHarnessArgv_NeverEmitsProjectDirFlag(t *testing.T) {
 	result := boot.Result{
 		BootDir:       "/state/boot/eng-nanite/current",
+		Provider:      boot.ProviderClaude,
 		Scope:         strPtr("/Users/chrispian/dev/hollis-labs/apps/nanite"),
 		ProjectDirArg: []string{"--add-dir", boot.ProjectDirPlaceholder},
 	}
-	argv := boot.HarnessArgv(result)
+	argv, err := boot.HarnessArgv(result)
+	if err != nil {
+		t.Fatalf("HarnessArgv(%+v): %v", result, err)
+	}
 	joined := strings.Join(argv, " ")
 	if strings.Contains(joined, "--add-dir") {
 		t.Fatalf("HarnessArgv(%+v) = %v; must never contain --add-dir", result, argv)
@@ -361,3 +379,209 @@ func TestHarnessArgv_NeverEmitsProjectDirFlag(t *testing.T) {
 // --- test helpers ---------------------------------------------------------
 
 func strPtr(s string) *string { return &s }
+
+// --- Codex (CW-20260906-0001) ---------------------------------------------
+
+// realCodexBootReportFixture is the literal stdout of a real invocation run
+// for this task, on 2026-09-06, against the installed cairn binary
+// (/Users/chrispian/go/bin/cairn, revision c6b45c2):
+//
+//	cairn boot codex-coord-agent-setup \
+//	  --profile /Users/chrispian/dev/projects/agent-setup \
+//	  --provider codex \
+//	  --boot-root /tmp/tachyon-t14-scratch-boot --session current --json
+//
+// Every Codex decoding test below is grounded in this actual document. Note
+// what it carries that the Claude fixture does not: env_amendments and
+// home_resource_paths, the two keys this increment exists to act on.
+const realCodexBootReportFixture = `{
+  "boot_dir": "/tmp/tachyon-t14-scratch-boot/codex-coord-agent-setup/current",
+  "provider": "codex",
+  "profile_root": "/Users/chrispian/dev/projects/agent-setup",
+  "scope": "/Users/chrispian/dev/projects/agent-setup",
+  "settings_path": "/tmp/tachyon-t14-scratch-boot/codex-coord-agent-setup/current/config.toml",
+  "cwd_preference": "boot_dir",
+  "project_dir_arg": [
+    "--add-dir",
+    "{{.ProjectDir}}"
+  ],
+  "env_amendments": [
+    "CODEX_HOME={{.BootDir}}"
+  ],
+  "home_resource_paths": [
+    "auth.json",
+    "hooks.json",
+    "hooks"
+  ],
+  "saved_binding_path": null,
+  "saved_dropped_sets": null
+}
+`
+
+// realClaudeBootReportFixture is the same command without --provider, run at
+// the same time against coord-agent-setup: the Claude half of the pair, and
+// the document the permanent --settings guard above replays. Its
+// env_amendments and home_resource_paths are null, which is what makes
+// "Claude launches gained nothing" checkable rather than asserted.
+const realClaudeBootReportFixture = `{
+  "boot_dir": "/tmp/tachyon-t14-scratch-claude/coord-agent-setup/current",
+  "provider": "claude",
+  "profile_root": "/Users/chrispian/dev/projects/agent-setup",
+  "scope": "/Users/chrispian/dev/projects/agent-setup",
+  "settings_path": "/tmp/tachyon-t14-scratch-claude/coord-agent-setup/current/.claude/settings.json",
+  "cwd_preference": "boot_dir",
+  "project_dir_arg": [
+    "--add-dir",
+    "{{.ProjectDir}}"
+  ],
+  "env_amendments": null,
+  "home_resource_paths": null,
+  "saved_binding_path": null,
+  "saved_dropped_sets": null
+}
+`
+
+// TestInvoke_DecodesRealCapturedCodexReport is the Codex counterpart of
+// TestInvoke_DecodesRealCapturedReport: the two keys added for this
+// increment decode off the real document, and the keys Tachyon does not
+// read (profile_root, saved_binding_path, saved_dropped_sets) are ignored
+// without failing the decode — Cairn's contract says new keys are free.
+func TestInvoke_DecodesRealCapturedCodexReport(t *testing.T) {
+	result, _, err := boot.Invoke(context.Background(), fakeRunner([]byte(realCodexBootReportFixture), nil, nil), nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if result.Provider != boot.ProviderCodex {
+		t.Errorf("Provider = %q; want %q", result.Provider, boot.ProviderCodex)
+	}
+	if result.CwdPreference != "boot_dir" {
+		t.Errorf("CwdPreference = %q; want boot_dir", result.CwdPreference)
+	}
+	if !slices.Equal(result.EnvAmendments, []string{"CODEX_HOME=" + boot.BootDirPlaceholder}) {
+		t.Errorf("EnvAmendments = %v; want the un-substituted CODEX_HOME amendment", result.EnvAmendments)
+	}
+	if !slices.Equal(result.HomeResourcePaths, []string{"auth.json", "hooks.json", "hooks"}) {
+		t.Errorf("HomeResourcePaths = %v; want auth.json, hooks.json, hooks", result.HomeResourcePaths)
+	}
+}
+
+// TestInvoke_ClaudeReportHasNoAmendmentsOrHomeResources is the other half of
+// that pair, and the shape every Claude launch depends on: nil, not empty,
+// so [boot.Environment] and [boot.PrepareHomeResources] both short-circuit
+// and a Claude launch does exactly what it did before Codex existed.
+func TestInvoke_ClaudeReportHasNoAmendmentsOrHomeResources(t *testing.T) {
+	result, _, err := boot.Invoke(context.Background(), fakeRunner([]byte(realClaudeBootReportFixture), nil, nil), nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if result.EnvAmendments != nil {
+		t.Errorf("EnvAmendments = %v; want nil for claude", result.EnvAmendments)
+	}
+	if result.HomeResourcePaths != nil {
+		t.Errorf("HomeResourcePaths = %v; want nil for claude", result.HomeResourcePaths)
+	}
+}
+
+// TestHarnessArgv_CodexGrantsScopeWithTheFlagCairnReported pins the Codex
+// branch: the access grant Claude Code gets through --settings has to be
+// made on the command line instead, and the flag's spelling is read from
+// the report rather than hardcoded — the same property
+// TestResultProjectDirArgv_FlagNameFromJSONNotHardcoded pins one layer down.
+func TestHarnessArgv_CodexGrantsScopeWithTheFlagCairnReported(t *testing.T) {
+	result := mustDecode(t, realCodexBootReportFixture)
+
+	argv, err := boot.HarnessArgv(result)
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	want := []string{"--add-dir", "/Users/chrispian/dev/projects/agent-setup"}
+	if !slices.Equal(argv, want) {
+		t.Fatalf("HarnessArgv = %v; want %v", argv, want)
+	}
+	if slices.Contains(argv, "--settings") {
+		t.Fatalf("codex argv carries claude's --settings flag: %v", argv)
+	}
+}
+
+// TestHarnessArgv_CodexReadsTheFlagNameFromTheReport proves the branch is
+// data-driven: a provider that spelled its project-dir flag differently
+// would come through with that spelling, unchanged.
+func TestHarnessArgv_CodexReadsTheFlagNameFromTheReport(t *testing.T) {
+	scope := "/Users/chrispian/dev/projects/agent-setup"
+	result := boot.Result{
+		BootDir:       "/state/boot/x/current",
+		Provider:      boot.ProviderCodex,
+		Scope:         &scope,
+		ProjectDirArg: []string{"--sandbox-dir=" + boot.ProjectDirPlaceholder},
+	}
+	argv, err := boot.HarnessArgv(result)
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	if !slices.Equal(argv, []string{"--sandbox-dir=" + scope}) {
+		t.Fatalf("HarnessArgv = %v; want the report's own flag spelling", argv)
+	}
+}
+
+// TestHarnessArgv_CodexNeverEmitsTheExecOnlyFlag is a permanent guard on the
+// one flag a reader of Cairn's manual recipe is most likely to copy into the
+// wrong place. `--skip-git-repo-check` belongs to `codex exec`, where a
+// non-git boot directory needs it; the interactive CLI rejects it outright,
+// so a launch carrying it fails immediately with a usage error.
+func TestHarnessArgv_CodexNeverEmitsTheExecOnlyFlag(t *testing.T) {
+	argv, err := boot.HarnessArgv(mustDecode(t, realCodexBootReportFixture))
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	for _, tok := range argv {
+		if strings.Contains(tok, "--skip-git-repo-check") {
+			t.Fatalf("interactive codex argv carries the exec-only flag: %v", argv)
+		}
+	}
+}
+
+// TestHarnessArgv_CodexWithNoScopeGrantsNothing: a boot with no scope has
+// nothing to grant, and Cairn's own contract already spells that as a null
+// scope. No flag, rather than a flag granting the empty string.
+func TestHarnessArgv_CodexWithNoScopeGrantsNothing(t *testing.T) {
+	result := boot.Result{
+		BootDir:       "/state/boot/x/current",
+		Provider:      boot.ProviderCodex,
+		Scope:         nil,
+		ProjectDirArg: []string{"--add-dir", boot.ProjectDirPlaceholder},
+	}
+	argv, err := boot.HarnessArgv(result)
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	if len(argv) != 0 {
+		t.Fatalf("HarnessArgv = %v; want no flags for a scopeless codex boot", argv)
+	}
+}
+
+// TestHarnessArgv_UnknownProviderIsARefusalNotAnEmptyArgv: launching the
+// wrong harness, or a bare `claude` with no flags at all, is the outcome
+// this refusal exists to prevent.
+func TestHarnessArgv_UnknownProviderIsARefusalNotAnEmptyArgv(t *testing.T) {
+	for _, provider := range []string{"", "opencode", "Claude", "gemini"} {
+		argv, err := boot.HarnessArgv(boot.Result{BootDir: "/state/boot/x/current", Provider: provider})
+		if err == nil {
+			t.Errorf("HarnessArgv(provider %q) = %v, nil; want a refusal", provider, argv)
+		}
+		if argv != nil {
+			t.Errorf("HarnessArgv(provider %q) returned argv %v alongside its error", provider, argv)
+		}
+	}
+}
+
+// mustDecode decodes one captured report fixture the way Invoke does, so a
+// test asserting on a real document does not hand-build a Result that could
+// drift from what the wire actually carries.
+func mustDecode(t *testing.T, fixture string) boot.Result {
+	t.Helper()
+	var result boot.Result
+	if err := json.Unmarshal([]byte(fixture), &result); err != nil {
+		t.Fatalf("decoding fixture: %v", err)
+	}
+	return result
+}

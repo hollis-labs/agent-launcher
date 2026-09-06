@@ -25,6 +25,11 @@ type Config struct {
 	// Scope, if non-empty, overrides the binding's own scope (cairn boot
 	// --scope). Optional.
 	Scope string
+	// Provider, if non-empty, is the harness to materialize into (cairn
+	// boot --provider). Empty renders whatever the resolved profile
+	// declares, exactly as the app's own launch path does when the compose
+	// form leaves the control at its default. Optional.
+	Provider string
 }
 
 // Report is everything one [Run] learned, in typed form, so main.go's
@@ -54,9 +59,29 @@ type Report struct {
 	// never a success/failure signal on its own.
 	Stderr []byte
 
-	// Result and HarnessArgv are only meaningful when InvokeErr is nil.
+	// Result, HarnessArgv, Env and ProviderHome are only meaningful when
+	// InvokeErr is nil.
 	Result      boot.Result
 	HarnessArgv []string
+	// Env is internal/boot.Environment's output: the provider's environment
+	// amendments with Cairn's placeholders substituted, exactly as the
+	// launch path would put them in front of the terminal's command. Nil
+	// for a provider that declares none.
+	Env []string
+	// ProviderHome is the operator's own provider home the launch path
+	// would link home_resource_paths from, or "" when the provider
+	// redirects no home. Reported and never acted on: this command plants
+	// no links, exactly as it moves no boot directory aside.
+	ProviderHome string
+	// HarnessArgvErr, EnvErr and ProviderHomeErr are whatever the
+	// corresponding internal/boot call returned — a provider Tachyon has no
+	// argv for, an amendment carrying an unknown placeholder, a provider
+	// home with no known default. Reported rather than returned, for the
+	// same reason InvokeErr is: what was already learned stays worth
+	// printing.
+	HarnessArgvErr  error
+	EnvErr          error
+	ProviderHomeErr error
 
 	// InvokeErr is whatever internal/boot.Invoke returned: typically a
 	// *boot.InvokeError from a non-zero cairn exit — including cairn's own
@@ -92,6 +117,7 @@ func Run(ctx context.Context, cfg Config, runner boot.Runner) (Report, error) {
 	comp := compose.Composition{
 		Target:   cfg.Target,
 		Bundle:   cfg.Bundle,
+		Provider: cfg.Provider,
 		BootRoot: cfg.BootRoot,
 		Scope:    cfg.Scope,
 	}
@@ -117,7 +143,17 @@ func Run(ctx context.Context, cfg Config, runner boot.Runner) (Report, error) {
 	}
 
 	report.Result = result
-	report.HarnessArgv = boot.HarnessArgv(result)
+	report.HarnessArgv, report.HarnessArgvErr = boot.HarnessArgv(result)
+	report.Env, report.EnvErr = boot.Environment(result)
+
+	// Read-only, like everything else this command does: the home is
+	// resolved and printed so an operator can see where the launch path
+	// would link auth.json and hooks from, but nothing is linked here.
+	if key, err := boot.HomeRedirectKey(result); err != nil {
+		report.ProviderHomeErr = err
+	} else {
+		report.ProviderHome, report.ProviderHomeErr = boot.ResolveHome(key)
+	}
 	return report, nil
 }
 

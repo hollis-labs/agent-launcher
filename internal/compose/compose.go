@@ -25,6 +25,23 @@ type Composition struct {
 	// Required.
 	Bundle string
 
+	// Provider is the harness this launch materializes into: it becomes
+	// --provider's value. Empty omits the flag entirely, which is not the
+	// same as naming a default — Cairn's own --provider defaults to the
+	// provider the resolved profile declares, so an omitted flag renders
+	// exactly what `cairn boot <target>` renders on its own. This package
+	// neither defaults it nor validates it (D8): a word that names no
+	// harness Cairn knows is refused by Cairn, at the terminal, with a
+	// diagnostic naming what it does know — a second, necessarily-partial
+	// list here could only disagree with that one.
+	//
+	// It is a materialization target and never inferred from anything. In
+	// particular nothing here reads Target: a binding named "codex-..."
+	// carries no provider meaning, and a launcher that guessed one from a
+	// name would render a Codex layout for a Claude profile the first time
+	// someone named a binding after the project rather than the harness.
+	Provider string
+
 	// BootRoot becomes --boot-root's value, unchanged. Required, and never
 	// defaulted — see the package doc's hazard section (D9). A caller
 	// computes this under Tachyon's own state directory; this package only
@@ -75,7 +92,7 @@ var (
 // Arguments renders the portion of a Cairn composition invocation shared by
 // `cairn boot` and `cairn show`:
 //
-//	<target> --profile <bundle> [--with <part>]...
+//	<target> --profile <bundle> [--provider <name>] [--with <part>]...
 //	  [--skill <a,b,c>] [--prompt <a,b,c>]
 //	  [--set <slot>=<value>]... [--scope <path>]
 //
@@ -92,6 +109,10 @@ func Arguments(c Composition) ([]string, error) {
 	}
 
 	args := []string{c.Target, "--profile", c.Bundle}
+
+	if c.Provider != "" {
+		args = append(args, "--provider", c.Provider)
+	}
 
 	for _, part := range c.Parts {
 		args = append(args, "--with", part)
@@ -119,8 +140,8 @@ func Arguments(c Composition) ([]string, error) {
 // Build renders c as the argv for `cairn boot`, in the fixed order:
 //
 //	boot <target> --profile <bundle> --boot-root <root> --session current
-//	     [--with <part>]... [--skill <a,b,c>] [--prompt <a,b,c>]
-//	     [--set <slot>=<value>]... [--scope <path>] --json
+//	     [--provider <name>] [--with <part>]... [--skill <a,b,c>]
+//	     [--prompt <a,b,c>] [--set <slot>=<value>]... [--scope <path>] --json
 //
 // It does not include the program name ("cairn") itself — only the
 // arguments a caller passes to whatever runs that binary, which is a

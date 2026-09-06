@@ -30,6 +30,19 @@ app path, macOS identity, tray, hotkey or launch route.
 
 ## Boundaries
 
-Tachyon must not run `cairn install`. For this rollout, preserve the Claude path
-before Codex work: every Claude launch argv must include
-`--settings <bootdir>/.claude/settings.json`.
+Tachyon must not run `cairn install`. Every Claude launch argv must include
+`--settings <bootdir>/.claude/settings.json` — permanently, and guarded by
+`TestHarnessArgv_AlwaysIncludesSettingsFlag`.
+
+Codex launches are native and share the same orchestration core: no branch on
+provider in `internal/launch`, only different content in Cairn's `--json`
+report. The interactive shape is cwd = boot dir, `CODEX_HOME=<bootdir>`,
+`codex --add-dir <scope>`. `--skip-git-repo-check` belongs to `codex exec` and
+must never reach an interactive launch. The operator-owned resources Cairn
+reports in `home_resource_paths` are linked from the operator's own Codex home,
+never copied, and a missing one refuses the launch rather than opening a
+session whose hooks silently do not run.
+
+A provider is never inferred from a binding's name. It comes from the resolved
+profile cascade (a part declaring `provider: codex`), or from the palette's
+own Provider control, which renders `--provider`.

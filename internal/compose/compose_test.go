@@ -257,6 +257,124 @@ func buildCases(bootRoot string) []buildCase {
 				"--json",
 			},
 		},
+		{
+			// CW-20260906-0001. --provider is the one flag whose value is a
+			// materialization target rather than content, and it renders
+			// exactly like every other optional field: present when set,
+			// absent when not.
+			name: "provider selected explicitly",
+			comp: compose.Composition{
+				Target:   "codex-coord-agent-setup",
+				Bundle:   "/Users/chrispian/dev/projects/agent-setup",
+				Provider: "codex",
+				BootRoot: bootRoot,
+			},
+			want: []string{
+				"boot", "codex-coord-agent-setup",
+				"--profile", "/Users/chrispian/dev/projects/agent-setup",
+				"--boot-root", bootRoot,
+				"--session", "current",
+				"--provider", "codex",
+				"--json",
+			},
+		},
+		{
+			name: "provider alongside everything else a compose form can add",
+			comp: compose.Composition{
+				Target:   "orchestrator",
+				Bundle:   "/Users/chrispian/dev/projects/agent-setup",
+				Provider: "codex",
+				BootRoot: bootRoot,
+				Parts:    []string{"codex-cli"},
+				Skills:   []string{"surface-discovery"},
+				Scope:    "/Users/chrispian/dev/projects/agent-setup",
+			},
+			want: []string{
+				"boot", "orchestrator",
+				"--profile", "/Users/chrispian/dev/projects/agent-setup",
+				"--boot-root", bootRoot,
+				"--session", "current",
+				"--provider", "codex",
+				"--with", "codex-cli",
+				"--skill", "surface-discovery",
+				"--scope", "/Users/chrispian/dev/projects/agent-setup",
+				"--json",
+			},
+		},
+	}
+}
+
+// TestProviderOmittedEntirelyWhenUnset is the property the ordinary launch
+// depends on: an empty Provider is not "the default provider spelled out,"
+// it is no flag at all, so Cairn renders whatever the resolved profile
+// cascade declares — exactly what `cairn boot <target>` does on its own.
+// The palette leaves the control empty for every launch that does not
+// deliberately retarget, so this is the common path and not an edge case.
+func TestProviderOmittedEntirelyWhenUnset(t *testing.T) {
+	bootRoot := tachyonBootRoot(t)
+	for _, tc := range buildCases(bootRoot) {
+		if tc.comp.Provider != "" {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := compose.Build(tc.comp)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			for _, a := range got {
+				if a == "--provider" {
+					t.Fatalf("Build(%+v) = %v; emitted --provider for an unset Provider", tc.comp, got)
+				}
+			}
+		})
+	}
+}
+
+// TestProviderIsNeverInferredFromTheTarget pins the decision this flag was
+// added under: a binding named "codex-..." says nothing about a harness.
+// Reading one out of the name would render a Codex layout the first time
+// somebody named a binding after a project rather than a tool, and it would
+// do it silently.
+func TestProviderIsNeverInferredFromTheTarget(t *testing.T) {
+	bootRoot := tachyonBootRoot(t)
+	for _, target := range []string{"codex-coord-agent-setup", "claude-something", "codex", "opencode-x"} {
+		got, err := compose.Build(compose.Composition{
+			Target:   target,
+			Bundle:   "/Users/chrispian/dev/projects/agent-setup",
+			BootRoot: bootRoot,
+		})
+		if err != nil {
+			t.Fatalf("Build(%q): %v", target, err)
+		}
+		for _, a := range got {
+			if a == "--provider" {
+				t.Errorf("Build(target %q) = %v; a provider was inferred from the target's name", target, got)
+			}
+		}
+	}
+}
+
+// TestArgumentsCarriesProviderForShowToo: internal/preview builds `cairn
+// show` argv through Arguments, and a preview that resolved a different
+// provider than the launch would show the wrong effective skills. --provider
+// is valid on show, so it belongs in the shared encoder rather than in
+// Build alone.
+func TestArgumentsCarriesProviderForShow(t *testing.T) {
+	got, err := compose.Arguments(compose.Composition{
+		Target:   "codex-coord-agent-setup",
+		Bundle:   "/Users/chrispian/dev/projects/agent-setup",
+		Provider: "codex",
+	})
+	if err != nil {
+		t.Fatalf("Arguments: %v", err)
+	}
+	want := []string{
+		"codex-coord-agent-setup",
+		"--profile", "/Users/chrispian/dev/projects/agent-setup",
+		"--provider", "codex",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Arguments = %#v; want %#v", got, want)
 	}
 }
 

@@ -135,13 +135,18 @@ func (s *Service) Preview(ctx context.Context, input CompositionInput) (Result, 
 // buildArgv uses compose.Arguments, the same pure encoder compose.Build uses
 // for boot, then adds only show's subcommand and --json. It cannot emit
 // --boot-root, --session, or --save-as because none is part of Arguments.
+//
+// Provider is carried through for the same reason every other field is: a
+// preview resolved against a different materialization target than the
+// launch would be a preview of a different composition. `cairn show` takes
+// --provider exactly as `cairn boot` does.
 func buildArgv(input CompositionInput, bundleRoot string) ([]string, error) {
 	sets := make([]compose.Set, len(input.Sets))
 	for i, set := range input.Sets {
 		sets[i] = compose.Set{Slot: set.Slot, Value: set.Value}
 	}
 	common, err := compose.Arguments(compose.Composition{
-		Target: input.Target, Bundle: bundleRoot, Parts: input.Parts,
+		Target: input.Target, Bundle: bundleRoot, Provider: input.Provider, Parts: input.Parts,
 		Skills: input.Skills, Prompts: input.Prompts, Sets: sets, Scope: input.Scope,
 	})
 	if err != nil {
