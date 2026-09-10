@@ -9,13 +9,29 @@ import (
 	"time"
 )
 
-// CurrentSegment is the fixed --session value every plant this package
-// prepares for uses, and the final path segment [CurrentPath] always
-// returns. Fixing it is what makes the boot directory stable across
-// relaunches: without it, Cairn's own default session naming (bootdir's
-// <name>/<session> layout) would produce a new directory, and a new
-// ~/.claude.json trust entry, on every launch.
-const CurrentSegment = "current"
+// DefaultSession is the session segment used when a caller has no
+// composition identity to supply — the single-composition case, and what
+// every plant used before launch profiles existed.
+//
+// It is a DEFAULT and no longer a constant every plant shares, which is the
+// change launch profiles forced. Cairn plants at <boot-root>/<target>/
+// <session>, and the target is the agent profile. A saved binding used to BE
+// the target, so every binding got its own directory; now `engineer` under
+// two different launch profiles, or in two different projects, is the same
+// target three times over. Fixing the session segment as well would plant
+// all of them at <root>/engineer/current — one directory, replanted out from
+// under whichever session got there first, with a settings document granting
+// the wrong scope.
+//
+// What must NOT change is that the segment is STABLE for a given
+// composition. Every boot directory a harness opens leaves a permanent trust
+// entry in ~/.claude.json keyed to its path (measured 2026-09-02: 7,129
+// entries, 7,070 pointing at directories that no longer exist), so a session
+// segment that varied per launch — a timestamp, say, which is Cairn's own
+// default — would rebuild exactly the problem this package exists to
+// prevent. See [SessionKey], which derives one from a composition's content
+// and returns the same value for the same composition forever.
+const DefaultSession = "current"
 
 // PrevPrefix is the fixed prefix every directory [Prepare] moves aside
 // carries. It is exported so a later, separate sweep (T15,
@@ -28,22 +44,23 @@ const PrevPrefix = ".prev-"
 // this guards callers that construct one some other way.
 var ErrInvalidKey = errors.New("boot: invalid key")
 
-// CurrentPath returns the fixed boot directory for key under root:
-// root/key/current. It performs no filesystem access and never errors —
+// SessionPath returns the boot directory for one composition:
+// root/key/session. It performs no filesystem access and never errors —
 // callers needing to know whether that path currently holds a planted
 // directory should stat it themselves, or call [Prepare], which does that
 // and clears it.
 //
-// Launching the same binding twice — the same root and the same key, since
-// [Key] is deterministic — always yields the same CurrentPath.
-func CurrentPath(root, key string) string {
-	return filepath.Join(root, key, CurrentSegment)
+// Launching the same composition twice always yields the same SessionPath,
+// because both segments are deterministic: key from [Key] over the agent
+// profile, session from [SessionKey] over the rest of the composition.
+func SessionPath(root, key, session string) string {
+	return filepath.Join(root, key, session)
 }
 
 // Plan is the outcome of [Prepare]: where the next plant should target, and
 // what, if anything, was moved aside to clear that path.
 type Plan struct {
-	// Current is root/key/current. Prepare guarantees nothing exists at
+	// Current is root/key/session. Prepare guarantees nothing exists at
 	// this path when it returns without error, so a subsequent plant (T10)
 	// can create it fresh — Cairn's own PlantFiles refuses an existing
 	// target.
@@ -59,26 +76,48 @@ type Plan struct {
 func (p Plan) Moved() bool { return p.MovedAside != "" }
 
 // Prepare clears the path a plant is about to target, without deleting
-// anything: if root/key/current exists, Prepare renames it to
+// anything: if root/key/session exists, Prepare renames it to
 // root/key/.prev-<timestamp>, which preserves any open handle a live
 // session holds on it — see this package's doc comment for why that
 // matters. It never removes a directory, and it never touches a .prev-*
 // directory this or any previous call already produced.
+//
+// An empty session means [DefaultSession].
+//
+// Both segments are validated, and for one reason: each is joined onto a
+// path. session in particular now carries caller-derived content — a launch
+// profile's name and a scope, through [SessionKey] — so it is exactly the
+// kind of value that must never be able to spell "..".
 //
 // Prepare creates root/key if it does not already exist. It does not plant
 // anything at Current itself; that is left for the caller (T10) to do
 // immediately afterward, since Prepare's only postcondition is that nothing
 // exists at Current when it returns successfully.
 //
-// Calling Prepare twice in a row for the same root and key without a plant
+// Calling Prepare twice in a row for the same arguments without a plant
 // landing at Current in between is a safe no-op on the second call: there is
 // nothing at Current to move aside, so no .prev-* directory is produced.
-func Prepare(root, key string) (Plan, error) {
+//
+// The .prev-* directories land beside the session directory, under
+// root/key — the same depth they landed at when the leaf was always
+// "current". That is what lets [Sweep] stay exactly as it was: it selects
+// .prev-* by prefix and has never needed to know what the leaf beside them
+// is called.
+func Prepare(root, key, session string) (Plan, error) {
 	if root == "" {
 		return Plan{}, errors.New("boot: root is required")
 	}
 	if err := validateKey(key); err != nil {
 		return Plan{}, err
+	}
+	if session == "" {
+		session = DefaultSession
+	}
+	if err := validateKey(session); err != nil {
+		return Plan{}, err
+	}
+	if strings.HasPrefix(session, PrevPrefix) {
+		return Plan{}, fmt.Errorf("%w: %q begins with %q, which is what a moved-aside directory is named", ErrInvalidKey, session, PrevPrefix)
 	}
 
 	keyDir := filepath.Join(root, key)
@@ -86,7 +125,7 @@ func Prepare(root, key string) (Plan, error) {
 		return Plan{}, fmt.Errorf("boot: create %s: %w", keyDir, err)
 	}
 
-	current := filepath.Join(keyDir, CurrentSegment)
+	current := filepath.Join(keyDir, session)
 	plan := Plan{Current: current}
 
 	switch _, err := os.Lstat(current); {

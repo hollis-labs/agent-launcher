@@ -104,7 +104,7 @@
 //
 // So Composition.BootRoot is not optional and [Build] does not default it.
 // A caller — T09's boot directory, ultimately — computes a value under
-// Tachyon's own state directory (internal/state.Root, the single definition
+// Tachyon's own state directory (internal/state.StateDir, the single definition
 // internal/shell.DefaultPrefsPath and internal/bundle.DefaultRootStore also
 // build their own paths from) and passes it in. [Build] requires it
 // non-empty and returns [ErrNoBootRoot]

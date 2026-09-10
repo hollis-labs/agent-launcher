@@ -1,6 +1,6 @@
 // Package skeleton renders a starting file for a brand-new bundle artifact —
-// a role profile, a reusable part profile, a template, a piece of role
-// prose, a skill, or a binding — and writes it into the bundle so
+// a role profile, a reusable part profile, a template, a prompt or a skill —
+// and writes it into the bundle so
 // [github.com/hollis-labs/tachyon/internal/bundle]'s
 // next read finds it and [github.com/hollis-labs/tachyon/internal/manager]'s
 // tree shows it, with no restart and no cache to invalidate (bundle.Bundle
@@ -25,41 +25,39 @@
 //
 // A scaffold's comments are advisory, not enforced: this package writes them
 // once, at creation, and never checks them again, and no other part of
-// Tachyon validates a scaffold once the user starts editing it. In
-// particular the template scaffold documents two rules Cairn itself does not
-// check — the six names cairn:value fills from, and how a marker's own line
-// behaves when it substitutes nothing — because nothing else says them.
+// Tachyon validates a scaffold once the user starts editing it.
 //
-// # The binding seam
+// What a scaffold says therefore has to be true of the engine that is
+// actually running, because nothing will catch it if it is not. The template
+// and profile scaffolds used to teach the marker engine — `cairn:slot`,
+// `cairn:value`, and the six instance facts a value filled from. agent-setup
+// moved off that engine on 2026-09-10: profiles became templates in their
+// own right, with `{{ extends }}` / `{{ section }}` / `{{ yield }}` in the
+// profile and `{{ file: ... }}` naming a template. Teaching markers now would
+// hand someone a document the live bundle has no reader for, which is why
+// TestScaffoldsPlaceNoRetiredMarkers is a negative guard rather than the
+// three positive ones it replaced.
 //
-// This package can create six of the bundle's seven artifact kinds:
-// profile, template, role prose, skill, prompt (CW-20260904-0006), and —
-// since CW-20260904-0002 (T23) — binding (see [SupportedKinds]).
-// bundle.KindHook is the one kind deliberately absent from [registry]; hook
-// creation is out of this package's scope entirely, unrelated to bindings.
+// The profile scaffold declares no provider, for the same class of reason:
+// no profile in agent-setup declares one, a runtime is a launch's to choose,
+// and a scaffold that wrote one would put it back one new profile at a time.
 //
-// bundle.KindBinding stayed absent for longer than the other four: its
-// scaffold depended on what CW-20260903-0011 (T07) settled as the shape of
-// a binding, a task running concurrently in a sibling worktree as most of
-// this package was first written, and Cairn's own storage for bindings
-// moved out from under T07's implementation shortly after
-// (CW-20260904-0002 / T23 — see internal/binding's own doc for that
-// history). Guessing the shape early would have either been thrown away
-// once a real interface existed, or worse, shipped a shape internal/binding's
-// own read/write code could not parse.
+// # What it can create, and what it cannot
 //
-// Adding it, now that internal/binding's directory-of-one-file-per-binding
-// interface is real, needed exactly one more [registry] entry: bindingScaffold
-// in scaffolds.go for the starting content, and
-// [github.com/hollis-labs/tachyon/internal/binding.BindingRelPath] — not a
-// relPath function defined in this package — for where a new binding
-// lands, so bindings/'s directory name and file extension stay known in
-// exactly the one place internal/binding itself defines them. Nothing else
-// in this package, in internal/manager's NewArtifact, or in the frontend's
-// creatable-kind list needed to change: SupportedKinds() and
-// internal/manager.Service.NewArtifactKinds both pick it up automatically,
-// the same "one more registry entry" seam this doc described before T23
-// landed. See scaffolds.go's own bindingScaffold doc for why its starting
-// content does not go through internal/binding's own
-// [github.com/hollis-labs/tachyon/internal/binding.Store.Create].
+// Four of the bundle's five artifact kinds: profile (and, through [NewPart],
+// a profile placed under profiles/parts), template, prompt and skill.
+// bundle.KindHook is the one deliberately absent from [registry]; hook
+// creation is out of this package's scope entirely.
+//
+// Two kinds it used to create are gone with their directories.
+// bundle.KindRoleProse wrote templates/roles/<id>.md, and bundle.KindBinding
+// wrote bindings/<id>.yaml through internal/binding's own path helper. Both
+// directories left agent-setup on 2026-09-10 — a role's prose is a
+// `{{ section charter }}` in the profile now, and launch configuration is
+// the launcher's and lives in internal/launchprofile.
+//
+// Adding a kind back, or adding a new one, is still one [registry] entry:
+// [SupportedKinds] and internal/manager.Service.NewArtifactKinds both read
+// that map, and the frontend's creatable-kind list is filtered against what
+// they return rather than hardcoding its own.
 package skeleton

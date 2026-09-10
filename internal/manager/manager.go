@@ -17,19 +17,22 @@
 // to answer a frontend call — encodes as a base64 string automatically. That
 // is deliberate: transporting the bytes through a JSON string field directly
 // would require them to already be valid UTF-8, and nothing in this package
-// or in bundle guarantees that of an arbitrary hook script or role prose
+// or in bundle guarantees that of an arbitrary hook script or template
 // file. Base64 makes the transport byte-safe regardless.
 //
-// # The two "architect"s
+// # Kind plus RelPath, always
 //
-// [bundle.KindProfile] and [bundle.KindRoleProse] share every basename in the
-// bundle (profiles/architect.md, templates/roles/architect.md). Being in
-// different [Group]s in the tree is not sufficient on its own — see plan
-// CW-20260518-0061, task CW-20260903-0009. Every [Node] and every [Content]
-// this package returns carries both Kind and RelPath, so a UI can label a row
-// or a tab with "profile · profiles/architect.md" versus
-// "role prose · templates/roles/architect.md" without the viewer having to
-// remember which group they clicked into.
+// Every [Node] and every [Content] this package returns carries both Kind
+// and RelPath, so a UI can label a row or a tab with
+// "profile · profiles/architect.md" without the viewer having to remember
+// which group they clicked into.
+//
+// This began as the fix for two artifacts sharing one basename — every
+// profile had a templates/roles/<same name>.md beside it (plan
+// CW-20260518-0061, task CW-20260903-0009). That kind is retired, but the
+// property is worth more now rather than less: a template id carries its
+// own path below templates/ ("lenses/primary-source-first"), so RelPath is
+// what makes a nested artifact identifiable at all.
 package manager
 
 import (
@@ -74,16 +77,14 @@ type KindLabel struct {
 }
 
 var kindLabels = map[bundle.Kind]KindLabel{
-	bundle.KindProfile:   {bundle.KindProfile, "Profile", "Profiles"},
-	bundle.KindRoleProse: {bundle.KindRoleProse, "Role prose", "Role prose"},
-	bundle.KindTemplate:  {bundle.KindTemplate, "Template", "Templates"},
-	bundle.KindPrompt:    {bundle.KindPrompt, "Prompt", "Prompts"},
-	bundle.KindSkill:     {bundle.KindSkill, "Skill", "Skills"},
-	bundle.KindHook:      {bundle.KindHook, "Hook", "Hooks"},
-	bundle.KindBinding:   {bundle.KindBinding, "Binding", "Bindings"},
+	bundle.KindProfile:  {bundle.KindProfile, "Profile", "Profiles"},
+	bundle.KindTemplate: {bundle.KindTemplate, "Template", "Templates"},
+	bundle.KindPrompt:   {bundle.KindPrompt, "Prompt", "Prompts"},
+	bundle.KindSkill:    {bundle.KindSkill, "Skill", "Skills"},
+	bundle.KindHook:     {bundle.KindHook, "Hook", "Hooks"},
 }
 
-// labelFor never returns the zero value for one of the seven known kinds —
+// labelFor never returns the zero value for one of the five known kinds —
 // kindLabels is exhaustive over [bundle.Kinds] and a test pins that.
 func labelFor(k bundle.Kind) KindLabel {
 	if l, ok := kindLabels[k]; ok {
@@ -205,12 +206,6 @@ func (s *Service) Tree() (Tree, error) {
 					Header: headerView(p.Header),
 				})
 			}
-		case bundle.KindRoleProse:
-			for _, r := range c.RoleProse {
-				g.Nodes = append(g.Nodes, Node{
-					Kind: k, ID: string(r.Role), Path: r.Path, RelPath: r.RelPath,
-				})
-			}
 		case bundle.KindTemplate:
 			for _, tpl := range c.Templates {
 				g.Nodes = append(g.Nodes, Node{
@@ -237,12 +232,6 @@ func (s *Service) Tree() (Tree, error) {
 			for _, h := range c.Hooks {
 				g.Nodes = append(g.Nodes, Node{
 					Kind: k, ID: string(h.Name), Path: h.Path, RelPath: h.RelPath,
-				})
-			}
-		case bundle.KindBinding:
-			for _, bd := range c.Bindings {
-				g.Nodes = append(g.Nodes, Node{
-					Kind: k, ID: string(bd.Name), Path: bd.Path, RelPath: bd.RelPath,
 				})
 			}
 		}

@@ -26,8 +26,8 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	bundleFlag := fs.String("bundle", "", "bundle root to boot from (default: the app's own active bundle, same as bundle.DefaultRootStore resolves)")
 	bootRootFlag := fs.String("boot-root", "", "where boot directories are planted (default: internal/state.BootRoot(), never ~/dev/agent-os — see D9)")
-	scopeFlag := fs.String("scope", "", "override the binding's own scope (cairn boot --scope)")
-	providerFlag := fs.String("provider", "", "the harness to materialize into (cairn boot --provider); empty renders whatever the resolved profile declares")
+	scopeFlag := fs.String("scope", "", "the directory the instance works in (cairn boot --scope)")
+	launchProfileFlag := fs.String("launch-profile", "", "path to a launch profile to fold in (cairn boot --with); it is what declares the provider, and cairn refuses a boot without one")
 	cairnFlag := fs.String("cairn", "", "path to the cairn binary (default: internal/config's cairnPath, then PATH)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: tachyon [flags] <target>\n\n")
@@ -82,11 +82,11 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	cfg := Config{
-		Target:   target,
-		Bundle:   bundleRoot,
-		BootRoot: bootRoot,
-		Scope:    *scopeFlag,
-		Provider: *providerFlag,
+		Target:        target,
+		Bundle:        bundleRoot,
+		BootRoot:      bootRoot,
+		Scope:         *scopeFlag,
+		LaunchProfile: *launchProfileFlag,
 	}
 	runner := boot.ExecRunner(cairnPath)
 
@@ -121,7 +121,7 @@ func printReport(w io.Writer, cairnPath string, r Report) {
 	fmt.Fprintln(w)
 
 	fmt.Fprintf(w, "cairn invocation:\n  %s %s\n", cairnPath, strings.Join(r.Argv, " "))
-	fmt.Fprintf(w, "boot directory (expected, from boot.Key/CurrentPath): %s\n", r.ExpectedBootDir)
+	fmt.Fprintf(w, "boot directory (expected, from boot.Key/SessionKey/SessionPath): %s\n", r.ExpectedBootDir)
 	fmt.Fprintln(w)
 
 	if r.InvokeErr != nil {
@@ -142,7 +142,7 @@ func printReport(w io.Writer, cairnPath string, r Report) {
 	fmt.Fprintf(w, "  env_amendments:  %s\n", argvOrNone(r.Result.EnvAmendments))
 	fmt.Fprintf(w, "  home_resource_paths: %s\n", argvOrNone(r.Result.HomeResourcePaths))
 	if r.Result.BootDir != r.ExpectedBootDir {
-		fmt.Fprintf(w, "  WARNING: boot_dir does not match the expected boot directory above — boot.Key/CurrentPath has drifted from what cairn actually planted\n")
+		fmt.Fprintf(w, "  WARNING: boot_dir does not match the expected boot directory above — boot.Key/SessionKey/SessionPath has drifted from what cairn actually planted\n")
 	}
 	fmt.Fprintln(w)
 

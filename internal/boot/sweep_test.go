@@ -81,11 +81,28 @@ func controlTarget(t *testing.T) string {
 	return wd
 }
 
-// mkPrev creates root/key/.prev-<suffix> as a directory and returns its
-// path.
-func mkPrev(t *testing.T, root, key, suffix string) string {
+// testProject stands in for the project segment every real boot directory
+// carries: the tree is <root>/<project>/<profile>/<session>, and a .prev-* is
+// a sibling of a session. Fixtures here plant at that depth rather than one
+// shallower, because a sweep that scanned the wrong depth would find nothing
+// and look exactly like a sweep with nothing to do.
+//
+// It is a literal rather than boot.ProjectKey's output: these tests are
+// about the sweep's walk, not about how a project segment is derived, and a
+// hand-written one keeps them from failing if that derivation changes.
+const testProject = "someproject-0123456789"
+
+// profileDir is <root>/<project>/<profile> — the directory a .prev-* and a
+// live session sit inside.
+func profileDir(root, profile string) string {
+	return filepath.Join(root, testProject, profile)
+}
+
+// mkPrev creates <root>/<project>/<profile>/.prev-<suffix> as a directory
+// and returns its path.
+func mkPrev(t *testing.T, root, profile, suffix string) string {
 	t.Helper()
-	p := filepath.Join(root, key, boot.PrevPrefix+suffix)
+	p := filepath.Join(profileDir(root, profile), boot.PrevPrefix+suffix)
 	if err := os.MkdirAll(p, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", p, err)
 	}
@@ -457,14 +474,14 @@ func TestSweep_UnparseableOutput_SkipsOnlyThatCandidate(t *testing.T) {
 
 // TestSweep_OnlyPrevPrefixedDirectoriesAreEverRemoved builds a boot root
 // with everything Sweep must leave alone sitting right next to what it
-// must remove: [boot.CurrentSegment] itself, a differently-named
+// must remove: [boot.DefaultSession] itself, a differently-named
 // directory, a stray file directly in the boot root, and a file (not a
 // directory) that happens to be named like a .prev-* candidate. Only the
 // one genuine .prev-* directory is removed.
 func TestSweep_OnlyPrevPrefixedDirectoriesAreEverRemoved(t *testing.T) {
 	root := t.TempDir()
 
-	current := filepath.Join(root, "eng-nanite", boot.CurrentSegment)
+	current := filepath.Join(profileDir(root, "eng-nanite"), boot.DefaultSession)
 	if err := os.MkdirAll(current, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", current, err)
 	}
@@ -473,7 +490,7 @@ func TestSweep_OnlyPrevPrefixedDirectoriesAreEverRemoved(t *testing.T) {
 		t.Fatalf("WriteFile(%s): %v", marker, err)
 	}
 
-	notPrev := filepath.Join(root, "eng-nanite", "not-a-prev-dir")
+	notPrev := filepath.Join(profileDir(root, "eng-nanite"), "not-a-prev-dir")
 	if err := os.MkdirAll(notPrev, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", notPrev, err)
 	}
@@ -483,7 +500,7 @@ func TestSweep_OnlyPrevPrefixedDirectoriesAreEverRemoved(t *testing.T) {
 		t.Fatalf("WriteFile(%s): %v", strayFile, err)
 	}
 
-	prevNamedFile := filepath.Join(root, "eng-nanite", boot.PrevPrefix+"but-a-file")
+	prevNamedFile := filepath.Join(profileDir(root, "eng-nanite"), boot.PrevPrefix+"but-a-file")
 	if err := os.WriteFile(prevNamedFile, []byte("not a directory"), 0o644); err != nil {
 		t.Fatalf("WriteFile(%s): %v", prevNamedFile, err)
 	}
@@ -588,4 +605,67 @@ func TestSweep_NeverFollowsAProviderHomeLink(t *testing.T) {
 	mustExist(t, auth)
 	mustExist(t, hooksDir)
 	mustExist(t, hookScript)
+}
+
+// TestSweepFindsWhatPrepareMovedAside is the drift guard prevCandidates' own
+// doc names: the sweep's walk and Prepare's layout are one shape, and if they
+// ever disagree the sweep quietly stops finding anything.
+//
+// That failure is invisible from the outside — a sweep with nothing to do and
+// a sweep looking in the wrong place report the same empty result — so this
+// plants through the real Prepare, at a real ProjectKey, and requires the
+// sweep to report it as a candidate. It is the reason neither side can be
+// changed alone.
+func TestSweepFindsWhatPrepareMovedAside(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, boot.ProjectKey("/Users/somebody/dev/projects/cairn"))
+	key := boot.Key("engineer")
+	session := boot.SessionKey("codex")
+
+	// First plant: nothing to move aside.
+	plan, err := boot.Prepare(projectRoot, key, session)
+	if err != nil {
+		t.Fatalf("Prepare (first): %v", err)
+	}
+	if err := os.MkdirAll(plan.Current, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", plan.Current, err)
+	}
+
+	// Relaunch: this is what produces a .prev-*.
+	second, err := boot.Prepare(projectRoot, key, session)
+	if err != nil {
+		t.Fatalf("Prepare (relaunch): %v", err)
+	}
+	if !second.Moved() {
+		t.Fatal("the relaunch moved nothing aside; there is no candidate to find")
+	}
+
+	// The guard is deliberately made unavailable so nothing is deleted: what
+	// this test needs is that the candidate was FOUND, and a skipped
+	// candidate is reported by path just as a swept one is.
+	fr := &lsofFake{t: t, rows: map[string]int{}} // control finds zero holders -> guard not trusted
+	report, err := boot.Sweep(context.Background(), root, fr.run)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	found := false
+	for _, s := range report.Skipped {
+		if s.Path == second.MovedAside {
+			found = true
+		}
+	}
+	for _, s := range report.Swept {
+		if s == second.MovedAside {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf(
+			"Sweep did not find %q, which Prepare had just created.\n"+
+				"prevCandidates walks <root>/<project>/<profile>/.prev-* and Prepare plants at that\n"+
+				"depth; one of them moved. report = %+v",
+			second.MovedAside, report,
+		)
+	}
 }

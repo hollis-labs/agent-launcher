@@ -1,9 +1,20 @@
+// The compose form's own state, minus the target.
+//
+// `provider` is deliberately absent. It used to be a free-text control that
+// rendered --provider; that flag is gone, and the provider is declared in
+// the launch profile and folded in by cairn's own cascade. A control here
+// would be a second source for a value a file already carries.
+//
+// `launchProfile` replaced it, and is not the same thing wearing a new
+// name: it names a file that says HOW this runs -- provider, sandbox
+// posture, settings -- which the launcher owns and cairn consumes as an
+// ordinary part.
 const emptyOverrides = Object.freeze({
   skills: [],
   skillDraft: "",
   prompts: [],
   promptDraft: "",
-  provider: "",
+  launchProfile: "",
   scope: "",
   parts: [],
   partDraft: "",
@@ -26,7 +37,15 @@ export function createCompositionDraft(draftId = 0) {
   };
 }
 
-function newDraft(state, mode, target = "") {
+// defaultOverrides are the fields a fresh draft may start non-empty, and
+// the list is deliberately short: skills and prompts are NEVER among them.
+//
+// cairn's --skill and --prompt are additive only, so a control that started
+// pre-filled would let a person remove an entry and silently get it anyway.
+// launchProfile and scope are different in kind -- they are single-valued
+// selections, and starting them at the obvious choice is a convenience
+// rather than a claim about what the target already resolves to.
+function newDraft(state, mode, target = "", defaults = {}) {
   // An open modal owns its target. UI beneath the backdrop cannot normally
   // ask to open another one, but refusing here makes that safety property
   // independent of presentation details.
@@ -37,6 +56,8 @@ function newDraft(state, mode, target = "") {
     mode,
     target,
     targetDraft: target,
+    launchProfile: defaults.launchProfile ?? "",
+    scope: defaults.scope ?? "",
   };
 }
 
@@ -56,15 +77,15 @@ function updateField(state, field, value) {
 
 export function compositionDraftReducer(state, action) {
   switch (action.type) {
-    case "OPEN_BINDING":
-      return newDraft(state, "binding", action.target);
-    case "OPEN_PROFILE":
-      return newDraft(state, "profile");
+    case "OPEN_TARGET":
+      return newDraft(state, "picked", action.target, action.defaults);
+    case "OPEN_BLANK":
+      return newDraft(state, "typed", "", action.defaults);
     case "SET_TARGET_DRAFT":
-      if (!state.open || state.mode !== "profile" || state.target) return state;
+      if (!state.open || state.mode !== "typed" || state.target) return state;
       return { ...state, targetDraft: action.value, launchError: "" };
-    case "CAPTURE_PROFILE": {
-      if (!state.open || state.mode !== "profile" || state.target) return state;
+    case "CAPTURE_TARGET": {
+      if (!state.open || state.mode !== "typed" || state.target) return state;
       const target = state.targetDraft.trim();
       if (!target) return state;
       return { ...state, target, targetDraft: target, launchError: "" };
@@ -115,13 +136,19 @@ export function compositionDraftReducer(state, action) {
   }
 }
 
+// compositionInput is what crosses the Wails boundary: exactly
+// internal/launch.CompositionInput's fields, and nothing synthesized.
+//
+// launchProfile is a NAME, never a path. The Go side resolves it against
+// the launch store, which validates it before joining, so nothing sent from
+// here can point cairn's --with at an arbitrary file.
 export function compositionInput(state) {
   if (!state.open || !state.target) return null;
   return {
     target: state.target,
+    launchProfile: state.launchProfile.trim(),
     skills: state.skills,
     prompts: state.prompts,
-    provider: state.provider.trim(),
     scope: state.scope.trim(),
     sets: state.sets,
     parts: state.parts,

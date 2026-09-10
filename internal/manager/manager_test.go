@@ -30,13 +30,12 @@ func newFixture(t *testing.T) string {
 
 	write("profiles/architect.md", "---\nid: architect\nname: Architect\nextends: base\n---\n\nProfile body.\n")
 	write("profiles/base.md", "---\n# A comment interleaved with real keys, as in the live base.md.\nid: base\nname: Base\nspec:\n  # nested, must not be read as a header key\n  name: not-this\n---\n\nAbstract floor body.\n")
-	write("templates/roles/architect.md", "Prose for the architect role. Not a profile.\n")
-	write("templates/agents.md", "<!-- cairn:slot role -->\n\n<!-- cairn:slot standing -->\n<!-- cairn:slot repo -->\n\n## Profile\n")
-	write("prompts/report.md", "- binding: <!-- cairn:value binding -->\n- scope: <!-- cairn:value scope -->\n")
+	write("templates/lenses/architect.md", "Prose for the architect lens. Not a profile.\n")
+	write("templates/standing.md", "Standing prose a profile pulls in whole.\n")
+	write("prompts/report.md", "Report the outcome.\n")
 	write("skills/commit/SKILL.md", "---\nid: commit\nname: Commit\n---\n\nHow to commit.\n")
 	write("skills/no-skill-file/NOTES.md", "not a skill file\n")
 	write("hooks/session-start.sh", "#!/bin/sh\necho hi\n")
-	write("bindings/eng.yaml", "profile: architect\nscope: ~/dev\n")
 	return root
 }
 
@@ -49,7 +48,7 @@ func newService(t *testing.T, root string) *manager.Service {
 	return manager.New(store)
 }
 
-func TestTreeGroupsAllSevenKindsInOrder(t *testing.T) {
+func TestTreeGroupsAllFiveKindsInOrder(t *testing.T) {
 	svc := newService(t, newFixture(t))
 	tr, err := svc.Tree()
 	if err != nil {
@@ -72,85 +71,87 @@ func TestTreeGroupsAllSevenKindsInOrder(t *testing.T) {
 	}
 }
 
-// TestTreeDistinguishesProfileFromRoleProse is the class-audit case: the tree
-// must not conflate profiles/architect.md and templates/roles/architect.md,
+// TestTreeDistinguishesProfileFromTemplate is the class-audit case: the tree
+// must not conflate profiles/architect.md and templates/lenses/architect.md,
 // and every node carries enough to tell them apart without relying on which
 // group the viewer remembers clicking into.
-func TestTreeDistinguishesProfileFromRoleProse(t *testing.T) {
+//
+// The pair changed when templates/roles/ retired (it used to be profile
+// versus role prose) and the hazard did not: templates/ holds lenses/ and
+// projects/ now, and a template's id carries its path precisely so a nested
+// one stays distinguishable.
+func TestTreeDistinguishesProfileFromTemplate(t *testing.T) {
 	svc := newService(t, newFixture(t))
 	tr, err := svc.Tree()
 	if err != nil {
 		t.Fatalf("Tree: %v", err)
 	}
 
-	var profileNode, roleProseNode *manager.Node
+	var profileNode, templateNode *manager.Node
 	for gi := range tr.Groups {
 		g := &tr.Groups[gi]
 		for ni := range g.Nodes {
 			n := &g.Nodes[ni]
-			if n.ID != "architect" {
-				continue
-			}
-			switch n.Kind {
-			case bundle.KindProfile:
+			switch {
+			case n.Kind == bundle.KindProfile && n.ID == "architect":
 				profileNode = n
-			case bundle.KindRoleProse:
-				roleProseNode = n
+			case n.Kind == bundle.KindTemplate && n.ID == "lenses/architect":
+				templateNode = n
 			}
 		}
 	}
-	if profileNode == nil || roleProseNode == nil {
-		t.Fatalf("expected an architect node in both the profile and role-prose groups; got profile=%v roleProse=%v", profileNode, roleProseNode)
+	if profileNode == nil || templateNode == nil {
+		t.Fatalf("expected an architect profile node and a lenses/architect template node; got profile=%v template=%v", profileNode, templateNode)
 	}
-	if profileNode.Kind == roleProseNode.Kind {
-		t.Fatalf("profile and role-prose nodes for %q have the same Kind %q", "architect", profileNode.Kind)
+	if profileNode.Kind == templateNode.Kind {
+		t.Fatalf("profile and template nodes for %q have the same Kind %q", "architect", profileNode.Kind)
 	}
-	if profileNode.RelPath == roleProseNode.RelPath {
-		t.Fatalf("profile and role-prose nodes for %q have the same RelPath %q", "architect", profileNode.RelPath)
+	if profileNode.RelPath == templateNode.RelPath {
+		t.Fatalf("profile and template nodes for %q have the same RelPath %q", "architect", profileNode.RelPath)
 	}
 	if profileNode.RelPath != "profiles/architect.md" {
 		t.Errorf("profile RelPath = %q; want profiles/architect.md", profileNode.RelPath)
 	}
-	if roleProseNode.RelPath != "templates/roles/architect.md" {
-		t.Errorf("role-prose RelPath = %q; want templates/roles/architect.md", roleProseNode.RelPath)
+	if templateNode.RelPath != "templates/lenses/architect.md" {
+		t.Errorf("template RelPath = %q; want templates/lenses/architect.md", templateNode.RelPath)
 	}
-	// The profile alone carries frontmatter; role prose is plain markdown
+	// The profile alone carries frontmatter; a template is plain markdown
 	// with no header concept, so its Header must be nil rather than a
 	// misleadingly-present zero value.
 	if profileNode.Header == nil || !profileNode.Header.Present {
 		t.Errorf("profile Header = %+v; want Present", profileNode.Header)
 	}
-	if roleProseNode.Header != nil {
-		t.Errorf("role-prose Header = %+v; want nil", roleProseNode.Header)
+	if templateNode.Header != nil {
+		t.Errorf("template Header = %+v; want nil", templateNode.Header)
 	}
 }
 
-// TestOpenDistinguishesProfileFromRoleProse pins the same guarantee at the
-// Open boundary: Open(kind, id) with the same id and different Kind opens two
-// different files with two different contents.
-func TestOpenDistinguishesProfileFromRoleProse(t *testing.T) {
+// TestOpenDistinguishesProfileFromTemplate pins the same guarantee at the
+// Open boundary: Open(kind, id) with a colliding basename and a different
+// Kind opens two different files with two different contents.
+func TestOpenDistinguishesProfileFromTemplate(t *testing.T) {
 	svc := newService(t, newFixture(t))
 
 	profile, err := svc.Open(string(bundle.KindProfile), "architect")
 	if err != nil {
 		t.Fatalf("Open(profile, architect): %v", err)
 	}
-	roleProse, err := svc.Open(string(bundle.KindRoleProse), "architect")
+	template, err := svc.Open(string(bundle.KindTemplate), "lenses/architect")
 	if err != nil {
-		t.Fatalf("Open(role-prose, architect): %v", err)
+		t.Fatalf("Open(template, lenses/architect): %v", err)
 	}
 
-	if profile.RelPath == roleProse.RelPath {
+	if profile.RelPath == template.RelPath {
 		t.Fatalf("both opens resolved to the same RelPath %q", profile.RelPath)
 	}
-	if bytes.Equal(profile.Bytes, roleProse.Bytes) {
-		t.Fatalf("profile and role-prose content is identical; fixture is broken")
+	if bytes.Equal(profile.Bytes, template.Bytes) {
+		t.Fatalf("profile and template content is identical; fixture is broken")
 	}
 	if profile.Kind != bundle.KindProfile {
 		t.Errorf("profile.Kind = %q; want %q", profile.Kind, bundle.KindProfile)
 	}
-	if roleProse.Kind != bundle.KindRoleProse {
-		t.Errorf("roleProse.Kind = %q; want %q", roleProse.Kind, bundle.KindRoleProse)
+	if template.Kind != bundle.KindTemplate {
+		t.Errorf("template.Kind = %q; want %q", template.Kind, bundle.KindTemplate)
 	}
 }
 

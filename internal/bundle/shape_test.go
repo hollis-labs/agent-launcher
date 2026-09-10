@@ -40,11 +40,21 @@ func TestHasKnownShape(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "just bindings/, nothing else",
+			name: "just templates/, nothing else",
+			build: func(t *testing.T, root string) {
+				mkdirAll(t, filepath.Join(root, "templates"))
+			},
+			want: true,
+		},
+		{
+			// bindings/ was a shape directory until agent-setup retired it.
+			// A root holding only one is now a root holding nothing this
+			// package knows about.
+			name: "just bindings/, which is no longer a bundle directory",
 			build: func(t *testing.T, root string) {
 				mkdirAll(t, filepath.Join(root, "bindings"))
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name: "just hooks/, nothing else",
@@ -65,10 +75,10 @@ func TestHasKnownShape(t *testing.T) {
 			build: func(t *testing.T, root string) {
 				mkdirAll(t, filepath.Join(root, "profiles"))
 				writeFile(t, filepath.Join(root, "profiles", "base.md"), "---\nid: base\n---\n")
-				mkdirAll(t, filepath.Join(root, "templates", "roles"))
+				mkdirAll(t, filepath.Join(root, "templates", "lenses"))
 				mkdirAll(t, filepath.Join(root, "skills"))
 				mkdirAll(t, filepath.Join(root, "hooks"))
-				mkdirAll(t, filepath.Join(root, "bindings"))
+				mkdirAll(t, filepath.Join(root, "prompts"))
 			},
 			want: true,
 		},

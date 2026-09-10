@@ -104,13 +104,12 @@ type Report struct {
 	GuardDetail string `json:"guardDetail"`
 }
 
-// Sweep enumerates every root/<key>/.prev-* directory across every key
-// under root — every binding's own .prev-* history, not just one — and
-// removes the ones the liveness guard reports as genuinely free, provided
-// the guard's own positive control succeeds for this run. It never
-// touches [CurrentSegment] ("current"), never touches anything outside
-// root, and never removes anything not named with the [PrevPrefix]
-// convention [Prepare] produces.
+// Sweep enumerates every .prev-* directory across the whole boot tree —
+// every composition's own history, not just one — and removes the ones the
+// liveness guard reports as genuinely free, provided the guard's own
+// positive control succeeds for this run. It never touches a live session
+// directory, never touches anything outside root, and never removes anything
+// not named with the [PrevPrefix] convention [Prepare] produces.
 //
 // runner is required; production callers pass [ExecLsofRunner], tests pass
 // a fake. Sweep calls runner with exactly ["-a", "-d", "cwd", "+D",
@@ -233,18 +232,41 @@ func guardUnavailable(cands []string, detail string) Report {
 	return r
 }
 
-// prevCandidates lists every root/<key>/.prev-* directory across every key
-// directly under root. A key is any directory directly under root — a
-// stray file sitting in root is silently not a key and contributes no
-// candidates. Within a key, only entries that are themselves directories
-// and whose name has the [PrevPrefix] prefix are candidates: a file
-// merely named like a .prev-* directory, a symlink (os.ReadDir's IsDir
-// reflects the entry's own type, never a symlink target's), and
-// [CurrentSegment] itself are all excluded by construction, not by a
-// separate check. A missing root is not an error — nothing has been
-// planted yet — and returns (nil, nil).
+// prevCandidates lists every .prev-* directory in the boot tree.
+//
+// # It walks the layout, and a test holds the two together
+//
+// The tree is <root>/<project>/<profile>/<session>, so a moved-aside
+// directory is a sibling of a session: <root>/<project>/<profile>/.prev-*.
+// This walks exactly that shape rather than recursing freely, and
+// TestSweepFindsWhatPrepareMovedAside plants one through [Prepare] and finds
+// it through here, so the two cannot drift apart silently — which is the
+// failure that would matter, because a sweep that stopped finding candidates
+// would look exactly like a sweep with nothing to do.
+//
+// It used to be <root>/<key>/.prev-*, one level shallower, when a boot
+// directory was <root>/<binding>/current.
+//
+// # What is excluded, by construction rather than by a check
+//
+// Only entries that are themselves directories and whose name carries the
+// [PrevPrefix] prefix are candidates. A file merely named like one, and a
+// SYMLINK to a directory, are both excluded because os.ReadDir's IsDir
+// reflects the entry's own type and never a symlink target's — which is what
+// keeps this away from the operator-owned Codex resources a boot directory
+// links to (see TestSweep_NeverFollowsAProviderHomeLink). A session
+// directory is excluded because it does not carry the prefix, whatever it is
+// named.
+//
+// Nothing descends INTO a candidate: a .prev-* holds a whole former boot
+// directory, links included, and this only needs its path.
+//
+// A missing root is not an error — nothing has been planted yet — and
+// returns (nil, nil). One unreadable directory at any level is skipped
+// rather than fatal, and failing closed by construction: nothing under it is
+// ever reported, so nothing under it is ever a deletion risk.
 func prevCandidates(root string) ([]string, error) {
-	keys, err := os.ReadDir(root)
+	projects, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -253,28 +275,30 @@ func prevCandidates(root string) ([]string, error) {
 	}
 
 	var out []string
-	for _, key := range keys {
-		if !key.IsDir() {
+	for _, project := range projects {
+		if !project.IsDir() {
 			continue
 		}
-		keyDir := filepath.Join(root, key.Name())
-		entries, err := os.ReadDir(keyDir)
+		projectDir := filepath.Join(root, project.Name())
+		profiles, err := os.ReadDir(projectDir)
 		if err != nil {
-			// One unreadable key directory must not stop every other key's
-			// candidates from being found, and — failing closed by
-			// construction, not by choice — it also means nothing under it
-			// is ever reported as a candidate, so nothing under it is ever a
-			// deletion risk either.
 			continue
 		}
-		for _, e := range entries {
-			if !e.IsDir() {
+		for _, profile := range profiles {
+			if !profile.IsDir() {
 				continue
 			}
-			if !strings.HasPrefix(e.Name(), PrevPrefix) {
+			profileDir := filepath.Join(projectDir, profile.Name())
+			entries, err := os.ReadDir(profileDir)
+			if err != nil {
 				continue
 			}
-			out = append(out, filepath.Join(keyDir, e.Name()))
+			for _, e := range entries {
+				if !e.IsDir() || !strings.HasPrefix(e.Name(), PrevPrefix) {
+					continue
+				}
+				out = append(out, filepath.Join(profileDir, e.Name()))
+			}
 		}
 	}
 	sort.Strings(out)

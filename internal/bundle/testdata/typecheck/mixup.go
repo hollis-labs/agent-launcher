@@ -1,4 +1,4 @@
-// This file must NOT compile. TestProfileAndRoleProseAreNotInterchangeable
+// This file must NOT compile. TestProfileAndTemplateAreNotInterchangeable
 // builds it and fails if the compiler accepts it.
 //
 // It lives under testdata/ so the go tool excludes it from ./... — a build
@@ -12,9 +12,11 @@ func wantsProfile(bundle.Profile)     {}
 func wantsProfileID(bundle.ProfileID) {}
 
 func main() {
-	// All eight role prose files share a basename with a profile, so "the
-	// architect role" is ambiguous until the type says which file it means.
-	var prose bundle.RoleProse
-	wantsProfile(prose)
-	wantsProfileID(bundle.RoleProseID("architect"))
+	// A template shares a basename with a profile as readily as role prose
+	// used to — templates/lenses/architect.md beside profiles/architect.md —
+	// so "the architect template" is ambiguous until the type says which
+	// file it means.
+	var tpl bundle.Template
+	wantsProfile(tpl)
+	wantsProfileID(bundle.TemplateID("architect"))
 }

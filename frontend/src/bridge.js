@@ -6,9 +6,9 @@
 // that pkg/application/bindings.go builds: "<package path>.<Type>.<Method>".
 const SHELL_SERVICE = "github.com/hollis-labs/tachyon/internal/shell.Service";
 const MANAGER_SERVICE = "github.com/hollis-labs/tachyon/internal/manager.Service";
-const BINDING_SERVICE = "github.com/hollis-labs/tachyon/internal/binding.Service";
+const LAUNCH_PROFILE_SERVICE = "github.com/hollis-labs/tachyon/internal/launchprofile.Service";
 const LAUNCH_SERVICE = "github.com/hollis-labs/tachyon/internal/launch.Service";
-const BINDING_COMPOSER_SERVICE = "github.com/hollis-labs/tachyon/internal/bindingcomposer.Service";
+const LAUNCH_COMPOSER_SERVICE = "github.com/hollis-labs/tachyon/internal/launchcomposer.Service";
 const COMPOSITION_PREVIEW_SERVICE = "github.com/hollis-labs/tachyon/internal/preview.Service";
 const PROJECT_SERVICE = "github.com/hollis-labs/tachyon/internal/project.Service";
 
@@ -65,7 +65,7 @@ export const Project = {
 // Tree()'s resolved value now also carries a State field (CW-20260904-0019),
 // "ok" | "unrecognized" -- see internal/manager.Service's Tree type doc.
 // "unrecognized" means the root exists and is readable but has none of the
-// five known artifact directories under it: a directory that was never a
+// known artifact directories under it: a directory that was never a
 // bundle (a home directory, a Desktop, a typo), not a genuinely empty one.
 // A root that does not exist at all still rejects the promise, same as
 // always -- State is only reached once there is a readable directory to
@@ -97,58 +97,83 @@ export const Manager = {
   NewPart: (id) => callService(MANAGER_SERVICE, "NewPart", id),
 };
 
-// Binding is internal/binding.Service: the bundle's bindings/ directory
-// (one file per binding), read and written through internal/binding.Store —
-// see that package's doc for why a binding's scope is always a path here,
-// never one of scopes.yaml's own alias names. Create and Update take a
-// binding shaped { name, profile, scope }.
+// LaunchProfile is internal/launchprofile.Service: Tachyon's own store of
+// launch profiles — the files that say HOW an agent runs, as distinct from
+// the bundle, which says what the agent IS.
 //
-// List()'s resolved value is a [ListResult]-shaped object — see
-// internal/binding.Service.List's own doc — not a bare array:
-// { bindings, state, path, detail }. state is one of "ok" | "missing" |
-// "unreadable"; bindings is only meaningful when state === "ok". This is
-// what lets Palette.jsx tell "genuinely no bindings yet" apart from "the
-// bundle root looks wrong" and "bindings/ exists but can't be read" — see
-// that component's own comment.
-export const Binding = {
-  List: () => callService(BINDING_SERVICE, "List"),
-  Create: (b) => callService(BINDING_SERVICE, "Create", b),
-  Update: (b) => callService(BINDING_SERVICE, "Update", b),
-  Delete: (name) => callService(BINDING_SERVICE, "Delete", name),
+// Each one is an ordinary Cairn part, not a format of Tachyon's own, so what
+// is saved here is exactly what `cairn boot --with <path>` consumes. They
+// live under ~/.config/tachyon/launch and are NOT in the bundle: changing
+// the active bundle changes what agents are available, never how they run.
+//
+// List()'s resolved value is a ListResult-shaped object, not a bare array:
+// { profiles, state, path, detail }. state is one of "ok" | "missing" |
+// "unreadable"; profiles is only meaningful when state === "ok". That is
+// what lets Palette.jsx tell "you have not written one yet" apart from
+// "this build cannot read the directory" — the same three-state shape the
+// binding list had, and for the reason recorded there.
+//
+// A profile is { name, path, provider, description }. It deliberately
+// carries no skills or prompts field: cairn's --skill and --prompt are
+// additive only, so a control that looked pre-checked would let someone
+// uncheck a skill and silently get it anyway. See Palette.jsx.
+export const LaunchProfile = {
+  List: () => callService(LAUNCH_PROFILE_SERVICE, "List"),
+  Get: (name) => callService(LAUNCH_PROFILE_SERVICE, "Get", name),
+  Read: (name) => callService(LAUNCH_PROFILE_SERVICE, "Read", name),
+  Save: (name, content) => callService(LAUNCH_PROFILE_SERVICE, "Save", name, content),
+  Create: (name, provider) => callService(LAUNCH_PROFILE_SERVICE, "Create", name, provider),
+  Dir: () => callService(LAUNCH_PROFILE_SERVICE, "Dir"),
 };
 
-// Launch is internal/launch.Service: the palette's entry points for turning
-// a picked binding, or a full compose-form selection built on top of one,
-// into a running terminal.
+// Launch is internal/launch.Service: the palette's entry point for turning a
+// selection into a running terminal. Fire-and-forget, no session handle --
+// the returned promise rejects with whatever the Go error was, and there is
+// no success payload beyond it resolving.
 //
-// Binding(name) resolves the named binding, runs `cairn boot` for it, and
-// spawns iTerm2 on the result -- fire-and-forget, no session handle. The
-// returned promise rejects with whatever internal/launch.Service.Launch
-// returned as an error; there is no success payload beyond the promise
-// resolving.
+// input carries everything the palette can compose:
+// { target, launchProfile, skills, prompts, scope, sets, parts }, matching
+// internal/launch.CompositionInput field for field.
 //
-// Composition(input) is CW-20260903-0017's compose form: the same
-// fire-and-forget contract, but input carries everything the palette's
-// compose controls can add on top of a target --
-// { target, skills, prompts, scope, sets, parts }, matching
-// internal/launch.CompositionInput field for field (skills: string[],
-// prompts: string[], sets: {slot, value}[], parts: string[]). prompts is
-// CW-20260904-0006's addition, mapped to Cairn's own --prompt flag exactly
-// as skills maps to --skill. Both skills and prompts are additive ONLY --
-// see Palette.jsx's own comment on why those arrays must always start empty
-// and grow only from direct user action, never from anything a binding or
-// profile already resolves to.
+//   target         an agent profile id from the bundle    WHAT this is
+//   launchProfile  a launch profile NAME, never a path    HOW it runs
+//   scope          the selected project's path            WHERE it works
+//
+// launchProfile is a name because the Go side resolves it against the store,
+// which validates it before joining — so nothing crossing this boundary can
+// point --with at an arbitrary file. An empty one means no provider, which
+// cairn refuses; that is the intended shape rather than a gap, and
+// internal/launchprofile seeds a default so a first run has one.
+//
+// There is no provider field. It is declared in the launch profile and
+// folded in by cairn's own cascade; a second source here could disagree with
+// the file.
+//
+// skills and prompts are additive ONLY -- see Palette.jsx's own comment on
+// why those arrays must always start empty and grow only from direct user
+// action, never from anything a profile already resolves to.
 export const Launch = {
-  Binding: (name) => callService(LAUNCH_SERVICE, "Launch", name),
+  // Targets is the agent profiles in the active bundle that can be booted —
+  // what the palette lists. Abstract profiles are excluded (cairn refuses to
+  // boot one); parts are not, because cairn treats a part as an ordinary
+  // bootable profile and hiding them would invent a distinction the catalog
+  // does not make. Each is { id, name, description }.
+  Targets: () => callService(LAUNCH_SERVICE, "Targets"),
   Composition: (input) => callService(LAUNCH_SERVICE, "LaunchComposition", input),
 };
 
-// Create-only binding authoring in the manager. Sets are accepted for the
-// launch actions but intentionally omitted from saved YAML by the service.
-export const BindingComposer = {
-  Save: (input) => callService(BINDING_COMPOSER_SERVICE, "Save", input),
-  Launch: (input) => callService(BINDING_COMPOSER_SERVICE, "Launch", input),
-  SaveAndLaunch: (input) => callService(BINDING_COMPOSER_SERVICE, "SaveAndLaunch", input),
+// LaunchComposer is internal/launchcomposer.Service: saving a compose-form
+// selection as a launch profile, and launching it.
+//
+// Only the durable half is saved -- provider, skills, prompts. A target, a
+// scope, a one-off --with part and a --set are facts about one launch, and
+// Save's result carries a `dropped` array naming whichever of them held a
+// value and was not written, so the UI can say so rather than losing them
+// silently.
+export const LaunchComposer = {
+  Save: (input) => callService(LAUNCH_COMPOSER_SERVICE, "Save", input),
+  Launch: (input) => callService(LAUNCH_COMPOSER_SERVICE, "Launch", input),
+  SaveAndLaunch: (input) => callService(LAUNCH_COMPOSER_SERVICE, "SaveAndLaunch", input),
 };
 
 // The raw Wails promise is intentionally returned unchanged. Wails adds a

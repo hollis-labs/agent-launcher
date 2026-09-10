@@ -1,7 +1,15 @@
-// Package config resolves Tachyon's user-editable settings file: a plain
-// XDG-style config a person edits by hand, distinct from internal/state's
-// per-user Application Support tree (shell.json, boot directories), which
-// is Tachyon's own generated state and never meant for hand-editing.
+// Package config resolves Tachyon's user-editable settings file:
+// $XDG_CONFIG_HOME/tachyon/config.json, a plain config a person edits by
+// hand.
+//
+// It sits beside internal/state's own files rather than apart from them now.
+// This package used to be the ONLY one resolving an XDG path — internal/state
+// sent everything to os.UserConfigDir(), ~/Library/Application Support on
+// macOS — and the split this doc described was between "hand-editable" and
+// "generated" as a consequence of that. internal/state moved onto the same
+// library, and the real split is now config versus state: what a person chose
+// (~/.config/tachyon) versus what Tachyon regenerates
+// (~/.local/state/tachyon). See internal/state's package doc.
 //
 // # Why this exists
 //

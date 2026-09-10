@@ -49,31 +49,14 @@ func TestNewPartMatchesTheInstalledCairnContract(t *testing.T) {
 	runCairn(t, cairn, "boot", "base", "--profile", root, "--with", "observability",
 		"--scope", t.TempDir(), "--boot-root", t.TempDir(), "--session", "composed")
 
-	bindings := filepath.Join(root, "bindings")
-	if err := os.MkdirAll(bindings, 0o755); err != nil {
-		t.Fatalf("MkdirAll bindings: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(bindings, "replay.yaml"),
-		[]byte("profile: base\nparts:\n  - observability\nscope: "+t.TempDir()+"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile binding: %v", err)
-	}
-	if replay := runCairn(t, cairn, "show", "replay", "--profile", root); !strings.Contains(replay, "base -> observability") {
-		t.Errorf("binding did not replay nested part by bare id:\n%s", replay)
-	}
-
-	saveScope := t.TempDir()
-	runCairn(t, cairn, "boot", "base", "--profile", root, "--with", "observability",
-		"--scope", saveScope, "--boot-root", t.TempDir(), "--session", "save", "--save-as", "saved")
-	saved, err := os.ReadFile(filepath.Join(bindings, "saved.yaml"))
-	if err != nil {
-		t.Fatalf("ReadFile saved binding: %v", err)
-	}
-	if !strings.Contains(string(saved), "observability") || strings.Contains(string(saved), "parts/observability") {
-		t.Fatalf("saved binding did not preserve the bare part id:\n%s", saved)
-	}
-	if replay := runCairn(t, cairn, "show", "saved", "--profile", root); !strings.Contains(replay, "base -> observability") {
-		t.Errorf("saved binding did not replay nested part:\n%s", replay)
-	}
+	// The binding replay and --save-as halves of this test are gone with
+	// the features: cairn dropped bindings and --save-as on 2026-09-10, and
+	// `cairn show <binding>` / `--save-as` are no longer accepted arguments.
+	//
+	// What they proved -- that a part composes by its BARE id, never as
+	// "parts/observability" -- is proved above by `--with observability`,
+	// which is the only way a part is named now. The launcher composes at
+	// launch time and saves nothing through cairn.
 }
 
 func TestProfileCollisionRefusalLeavesInstalledCairnCatalogUsable(t *testing.T) {

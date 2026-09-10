@@ -125,30 +125,30 @@ func TestKey_DistinctBindingNamesNeverCollide(t *testing.T) {
 	}
 }
 
-// --- CurrentPath -------------------------------------------------------------
+// --- SessionPath -------------------------------------------------------------
 
-func TestCurrentPath(t *testing.T) {
-	got := boot.CurrentPath("/state/boot", "planner")
+func TestSessionPath(t *testing.T) {
+	got := boot.SessionPath("/state/boot", "planner", boot.DefaultSession)
 	want := filepath.Join("/state/boot", "planner", "current")
 	if got != want {
-		t.Fatalf("CurrentPath = %q; want %q", got, want)
+		t.Fatalf("SessionPath = %q; want %q", got, want)
 	}
-	if filepath.Base(got) != boot.CurrentSegment {
-		t.Fatalf("CurrentPath's last segment = %q; want %q", filepath.Base(got), boot.CurrentSegment)
+	if filepath.Base(got) != boot.DefaultSession {
+		t.Fatalf("SessionPath's last segment = %q; want %q", filepath.Base(got), boot.DefaultSession)
 	}
 }
 
 // TestCurrentPath_SameBindingTwiceSamePath is the acceptance bullet stated
 // directly: launching the same binding twice produces the same current path
 // both times.
-func TestCurrentPath_SameBindingTwiceSamePath(t *testing.T) {
+func TestSessionPath_SameCompositionTwiceSamePath(t *testing.T) {
 	root := t.TempDir()
 	key := boot.Key("planner")
 
-	first := boot.CurrentPath(root, key)
-	second := boot.CurrentPath(root, boot.Key("planner"))
+	first := boot.SessionPath(root, key, boot.DefaultSession)
+	second := boot.SessionPath(root, boot.Key("planner"), boot.DefaultSession)
 	if first != second {
-		t.Fatalf("CurrentPath differed across two launches of the same binding: %q vs %q", first, second)
+		t.Fatalf("SessionPath differed across two launches of the same composition: %q vs %q", first, second)
 	}
 }
 
@@ -172,14 +172,14 @@ func TestPrepare_FirstLaunchNothingToMoveAside(t *testing.T) {
 	root := t.TempDir()
 	key := boot.Key("planner")
 
-	plan, err := boot.Prepare(root, key)
+	plan, err := boot.Prepare(root, key, "")
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	if plan.Moved() {
 		t.Fatalf("Plan.Moved() = true on a first launch; want false (nothing existed to move aside): %+v", plan)
 	}
-	if want := boot.CurrentPath(root, key); plan.Current != want {
+	if want := boot.SessionPath(root, key, boot.DefaultSession); plan.Current != want {
 		t.Fatalf("Plan.Current = %q; want %q", plan.Current, want)
 	}
 	if _, err := os.Lstat(plan.Current); !errors.Is(err, os.ErrNotExist) {
@@ -199,14 +199,14 @@ func TestPrepare_RelaunchMovesAsideExactlyOnePrev(t *testing.T) {
 	key := boot.Key("planner")
 
 	// Launch 1.
-	plan1, err := boot.Prepare(root, key)
+	plan1, err := boot.Prepare(root, key, "")
 	if err != nil {
 		t.Fatalf("Prepare (launch 1): %v", err)
 	}
 	plant(t, plan1.Current, "generation 1")
 
 	// Launch 2: a relaunch.
-	plan2, err := boot.Prepare(root, key)
+	plan2, err := boot.Prepare(root, key, "")
 	if err != nil {
 		t.Fatalf("Prepare (launch 2): %v", err)
 	}
@@ -230,7 +230,7 @@ func TestPrepare_RelaunchMovesAsideExactlyOnePrev(t *testing.T) {
 	var sawCurrent bool
 	for _, e := range entries {
 		switch {
-		case e.Name() == boot.CurrentSegment:
+		case e.Name() == boot.DefaultSession:
 			sawCurrent = true
 		case strings.HasPrefix(e.Name(), boot.PrevPrefix):
 			prevDirs = append(prevDirs, e.Name())
@@ -239,7 +239,7 @@ func TestPrepare_RelaunchMovesAsideExactlyOnePrev(t *testing.T) {
 		}
 	}
 	if !sawCurrent {
-		t.Errorf("no %q entry in key directory after relaunch and re-plant", boot.CurrentSegment)
+		t.Errorf("no %q entry in key directory after relaunch and re-plant", boot.DefaultSession)
 	}
 	if len(prevDirs) != 1 {
 		t.Fatalf("key directory has %d .prev-* entries after one relaunch; want exactly 1: %v", len(prevDirs), prevDirs)
@@ -273,10 +273,10 @@ func TestPrepare_RepeatedCallWithNoPlantIsANoOp(t *testing.T) {
 	root := t.TempDir()
 	key := boot.Key("planner")
 
-	if _, err := boot.Prepare(root, key); err != nil {
+	if _, err := boot.Prepare(root, key, ""); err != nil {
 		t.Fatalf("Prepare (1st): %v", err)
 	}
-	plan, err := boot.Prepare(root, key)
+	plan, err := boot.Prepare(root, key, "")
 	if err != nil {
 		t.Fatalf("Prepare (2nd): %v", err)
 	}
@@ -308,7 +308,7 @@ func TestPrepare_OpenHandleSurvivesRelaunch(t *testing.T) {
 	root := t.TempDir()
 	key := boot.Key("planner")
 
-	plan1, err := boot.Prepare(root, key)
+	plan1, err := boot.Prepare(root, key, "")
 	if err != nil {
 		t.Fatalf("Prepare (launch 1): %v", err)
 	}
@@ -339,7 +339,7 @@ func TestPrepare_OpenHandleSurvivesRelaunch(t *testing.T) {
 	// The relaunch: this is the operation under test. If this used
 	// os.RemoveAll instead of a rename, both handles above would now point
 	// at unlinked, orphaned files.
-	plan2, err := boot.Prepare(root, key)
+	plan2, err := boot.Prepare(root, key, "")
 	if err != nil {
 		t.Fatalf("Prepare (relaunch): %v", err)
 	}
@@ -404,13 +404,13 @@ func TestPrepare_TwoBindingsNeverCollide(t *testing.T) {
 		t.Fatalf("test setup: Key(planner) == Key(architect) == %q", keyA)
 	}
 
-	planA, err := boot.Prepare(root, keyA)
+	planA, err := boot.Prepare(root, keyA, "")
 	if err != nil {
 		t.Fatalf("Prepare(A): %v", err)
 	}
 	plant(t, planA.Current, "A")
 
-	planB, err := boot.Prepare(root, keyB)
+	planB, err := boot.Prepare(root, keyB, "")
 	if err != nil {
 		t.Fatalf("Prepare(B): %v", err)
 	}
@@ -439,14 +439,14 @@ func TestPrepare_TwoBindingsNeverCollide(t *testing.T) {
 func TestPrepare_RejectsInvalidKey(t *testing.T) {
 	root := t.TempDir()
 	for _, key := range []string{"", ".", "..", "a/b", "a" + string(filepath.Separator) + "b"} {
-		if _, err := boot.Prepare(root, key); !errors.Is(err, boot.ErrInvalidKey) {
+		if _, err := boot.Prepare(root, key, ""); !errors.Is(err, boot.ErrInvalidKey) {
 			t.Errorf("Prepare(root, %q) error = %v; want ErrInvalidKey", key, err)
 		}
 	}
 }
 
 func TestPrepare_RejectsEmptyRoot(t *testing.T) {
-	if _, err := boot.Prepare("", boot.Key("planner")); err == nil {
+	if _, err := boot.Prepare("", boot.Key("planner"), ""); err == nil {
 		t.Fatal("Prepare with an empty root returned no error")
 	}
 }

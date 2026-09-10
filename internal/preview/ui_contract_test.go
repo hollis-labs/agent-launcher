@@ -8,7 +8,7 @@ import (
 )
 
 func TestBothCompositionSurfacesUseSharedPreviewPresentation(t *testing.T) {
-	for _, name := range []string{"Palette.jsx", "BindingComposer.jsx"} {
+	for _, name := range []string{"Palette.jsx", "LaunchProfileComposer.jsx"} {
 		source := readFrontend(t, name)
 		for _, required := range []string{
 			`import EffectiveSkills from "./EffectiveSkills.jsx"`,
@@ -20,6 +20,13 @@ func TestBothCompositionSurfacesUseSharedPreviewPresentation(t *testing.T) {
 		}
 		if strings.Contains(source, "contributors") {
 			t.Errorf("%s interprets contributor labels; they belong only to Cairn's whole manifest key", name)
+		}
+		// A preview must resolve the SAME composition the launch will, and
+		// the launch profile is what declares the provider — cairn reports a
+		// different resolved skill set per provider, so a preview that
+		// skipped it would confidently show the wrong answer.
+		if !strings.Contains(source, "launchProfile") {
+			t.Errorf("%s builds a preview input with no launch profile; it would resolve a different provider than the launch", name)
 		}
 	}
 

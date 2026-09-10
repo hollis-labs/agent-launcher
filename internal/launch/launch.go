@@ -1,31 +1,57 @@
-// Package launch turns a picked binding, or a full compose-form
-// selection built on top of one, into a running terminal: the palette's
-// entry point once a target has been chosen from the list
-// internal/binding.Service already reads. It is small on purpose --
-// internal/compose (T08) already builds the cairn boot argv, internal/boot
-// (T09/T10) already runs cairn and decodes its --json report, and
-// internal/boot.SpawnITerm2 (T12, CW-20260903-0016) already knows how to
-// open iTerm2 on an argv. This package's whole job is gluing those three
-// together behind two Wails-bindable methods, [Service.Launch] (a bare
-// binding name -- unchanged since T12) and [Service.LaunchComposition]
-// (T13, CW-20260903-0017 -- the palette's compose form: skills to add,
-// a scope override, one-off --set values, additional --with parts, all
-// layered on top of the same target). Both funnel through the same
-// unexported orchestration core, [runComposition], so there is exactly one
-// implementation of "build the argv, run cairn, resolve a cwd, spawn" --
-// see that function's own doc.
+// Package launch turns a palette selection into a running terminal: an
+// agent profile from the bundle, a launch profile from Tachyon's own store,
+// a project to work in, and whatever the compose form added on top. It is
+// small on purpose -- internal/compose (T08) already builds the cairn boot
+// argv, internal/boot (T09/T10) already runs cairn and decodes its --json
+// report, and internal/boot.SpawnITerm2 (T12, CW-20260903-0016) already
+// knows how to open iTerm2 on an argv. This package's whole job is gluing
+// those three together behind one Wails-bindable method,
+// [Service.LaunchComposition].
+//
+// # Three things make a launch, and they come from three places
+//
+//	agent profile    the bundle          WHAT this is      cairn boot <target>
+//	launch profile   ~/.config/tachyon   HOW it runs       --with <path>
+//	project          Tachyon's own list  WHERE it works    --scope <path>
+//
+// That split is the 2026-09-10 ruling (Tesseract
+// cairn_is_a_template_engine_not_an_authority, agent_setup_declares_no_runtime):
+// agent-setup owns content and declares no runtime, cairn materializes a
+// directory and knows its shape only where it must, and the launcher owns
+// everything about a launch.
+//
+// A binding used to be all three at once, saved in the bundle, in a format
+// cairn could not read. agent-setup retired all 34 of them and cairn dropped
+// bindings and --save-as on top of that, so this package no longer resolves
+// one, and internal/binding is gone. What replaced it is not a smaller
+// binding: it is the same three facts, each owned by whoever actually knows
+// it. See internal/launchprofile.
+//
+// # The provider is declared, never passed and never inferred
+//
+// No --provider flag is built anywhere in this package or in
+// internal/compose. No profile in agent-setup declares a provider since
+// 2026-09-10, so cairn's own default resolves to nothing and it refuses to
+// render rather than writing one harness's files into another's directory.
+// The provider comes from the launch profile's frontmatter, folded in
+// through cairn's ordinary cascade.
+//
+// The consequence is worth stating plainly because it is the intended
+// shape rather than a gap: a composition with no launch profile has no
+// provider, and cairn refuses it. internal/launchprofile seeds a default so
+// a first run has one.
 //
 // # No session handle, ever (D7)
 //
-// Neither exported method returns anything but an error. This package
-// stores nothing about what it started -- no PID, no *os.Process, no
-// session id -- and nothing in it can answer "is it still running."
-// Tachyon is a launcher, not a console: a managed session with a list,
-// attach and resume was considered and rejected (plan CW-20260518-0061,
-// D7) because it pulls Tachyon back toward the daemon-backed stack this
-// whole design deliberately separates from. See internal/boot.SpawnITerm2's
-// own doc for the identical discipline one layer down: it starts
-// osascript and does not wait for it either.
+// The exported method returns nothing but an error. This package stores
+// nothing about what it started -- no PID, no *os.Process, no session id --
+// and nothing in it can answer "is it still running." Tachyon is a
+// launcher, not a console: a managed session with a list, attach and resume
+// was considered and rejected (plan CW-20260518-0061, D7) because it pulls
+// Tachyon back toward the daemon-backed stack this whole design
+// deliberately separates from. See internal/boot.SpawnITerm2's own doc for
+// the identical discipline one layer down: it starts osascript and does not
+// wait for it either.
 //
 // # Skills, and prompts, are additive only (CW-20260903-0017's fail-alone
 // criterion, extended to prompts by CW-20260904-0006)
@@ -35,31 +61,30 @@
 // cascade already resolves to, never a representation of what that cascade
 // already carries. This package has no way to compute the latter and must
 // never try -- see [CompositionInput]'s own doc for why, and
-// internal/compose's package doc for the three independent contributors
-// (the profile cascade, any --with part, a binding's own skills field)
+// internal/compose's package doc for the independent contributors (the
+// profile cascade, any --with part including the launch profile itself)
 // that make a Tachyon-side union not just redundant but actively wrong.
-// [binding.Binding] itself carries no skills field at all: there is
-// structurally nothing in this package's own data, or in what
-// internal/binding.Service ever hands the frontend, for a compose form's
-// initial state to seed itself from even by accident. See
-// TestBindingCarriesNoSkillsFieldToSeedFrom in launch_test.go, which pins
-// that absence down as a permanent regression guard.
+//
+// [launchprofile.Profile] carries no skills or prompts field, so there is
+// structurally nothing in what this package hands the frontend for a
+// compose form's initial state to seed itself from even by accident -- the
+// same absence [binding.Binding] used to provide, pinned by the same shape
+// of guard in launch_test.go.
 //
 // [CompositionInput.Prompts] carries the identical property, for the
-// identical reason -- Cairn's own --prompt flag documents itself as
-// "Additive only, for the reason --skill is" -- and is pinned by the same
-// shape of guard, TestBindingCarriesNoPromptsFieldToSeedFrom.
+// identical reason -- cairn's own --prompt flag documents itself as
+// "Additive only, for the reason --skill is".
 package launch
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/compose"
 	"github.com/hollis-labs/tachyon/internal/config"
+	"github.com/hollis-labs/tachyon/internal/launchprofile"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
 
@@ -82,57 +107,47 @@ var harnessBinary = map[string]string{
 }
 
 // Service is bound to the frontend as a Wails service: the palette's
-// launch entry point. Its exported methods are callable from JavaScript as
-// "github.com/hollis-labs/tachyon/internal/launch.Service.Launch" and
-// "...Service.LaunchComposition".
+// launch entry point. Its exported method is callable from JavaScript as
+// "github.com/hollis-labs/tachyon/internal/launch.Service.LaunchComposition".
 //
-// Like internal/binding.Service and internal/manager.Service, it holds a
-// [bundle.RootStore] rather than a fixed path or an already-open
-// [binding.Store]: every call resolves the active bundle root fresh, so
-// the binding a launch resolves is read from whichever bundle the palette
-// itself is currently showing.
+// Like internal/manager.Service it holds a [bundle.RootStore] rather than a
+// fixed path: every call resolves the active bundle root fresh, so a launch
+// reads whichever bundle the manager is currently showing.
+//
+// The launch-profile store is separate and is NOT rooted in the bundle,
+// which is the seam this whole design turns on. Changing the active bundle
+// changes what agents are available; it does not change how they run.
 type Service struct {
 	store bundle.RootStore
+
+	// launchDir overrides where launch profiles are read from. Empty means
+	// [state.LaunchDir]. Tests set it; the app does not.
+	launchDir string
 }
 
-// NewService returns a Service that resolves bindings against whichever
-// bundle store.Resolve() names.
+// NewService returns a Service reading agent profiles from whichever bundle
+// store.Resolve() names, and launch profiles from [state.LaunchDir].
 func NewService(store bundle.RootStore) *Service {
 	return &Service{store: store}
 }
 
-// Launch resolves name to a binding, runs the one `cairn boot` invocation
-// that produces its argv (internal/compose.Build, internal/boot.Invoke),
-// and spawns iTerm2 on the result (internal/boot.SpawnITerm2). It returns
-// only an error -- see the package doc's "no session handle, ever."
-//
-// A non-nil error here is safe to show a person directly: every error this
-// method can return already carries whatever underlying detail made it
-// fail (cairn's own stderr via *boot.InvokeError, an unresolved binding
-// name, an unrecognized cwd_preference, ...), matching this whole design's
-// standing aversion to a generic failure message that throws away why.
-func (s *Service) Launch(name string) error {
-	b, bundleRoot, err := s.resolveBinding(name)
-	if err != nil {
-		return err
-	}
+// NewServiceWithLaunchDir is [NewService] with the launch-profile store
+// pointed somewhere else, so a test never touches the real
+// ~/.config/tachyon/launch.
+func NewServiceWithLaunchDir(store bundle.RootStore, launchDir string) *Service {
+	return &Service{store: store, launchDir: launchDir}
+}
 
-	bootRoot, err := state.BootRoot()
-	if err != nil {
-		return fmt.Errorf("launch: resolving boot root: %w", err)
+// launchProfiles opens the store this service reads launch profiles from.
+func (s *Service) launchProfiles() (launchprofile.Store, error) {
+	if s.launchDir != "" {
+		return launchprofile.Open(s.launchDir), nil
 	}
-
-	// internal/config.ResolveCairnPath, the same lookup cmd/tachyon/main.go
-	// (T11) performs for its own --cairn-less default: an explicit
-	// cairnPath from the user's config file first, then PATH -- see that
-	// package's doc for why PATH alone is not enough once Tachyon runs as
-	// a launchd service.
-	cairnPath, err := config.ResolveCairnPath()
+	dir, err := state.LaunchDir()
 	if err != nil {
-		return fmt.Errorf("launch: %w", err)
+		return launchprofile.Store{}, fmt.Errorf("launch: %w", err)
 	}
-
-	return launch(context.Background(), b, bundleRoot, bootRoot, boot.ExecRunner(cairnPath), boot.SpawnITerm2)
+	return launchprofile.Open(dir), nil
 }
 
 // SetInput is one one-off --set slot=value pair as the frontend spells it
@@ -200,33 +215,32 @@ type CompositionInput struct {
 	// it anyway.
 	Prompts []string `json:"prompts"`
 
-	// Provider is the harness this one launch materializes into, chosen
-	// explicitly in the compose form. Empty -- the ordinary case -- sends no
-	// --provider at all and lets Cairn render whatever the resolved profile
-	// cascade declares, which is exactly what `cairn boot <target>` does on
-	// its own.
+	// LaunchProfile is the name of a launch profile in Tachyon's own store
+	// (internal/launchprofile) -- the file that says HOW this runs: the
+	// provider, the sandbox posture, whatever settings the launcher owns.
+	// It is resolved to a path and prepended to [compose.Composition.Parts]
+	// as the first --with, so everything else the compose form adds layers
+	// over it.
 	//
-	// It is never inferred. Nothing in this package, or in
-	// internal/compose, reads Target to guess a provider from it: a binding
-	// called "codex-coord-agent-setup" says nothing about a harness, and a
-	// launcher that read one out of the name would render a Codex layout
-	// the first time somebody named a binding after a project rather than a
-	// tool. A binding that should boot Codex says so in the content it
-	// resolves -- its profile cascade or one of its parts declaring
-	// `provider: codex` -- which is also what makes the palette's direct
-	// Enter-on-a-binding path (see [Service.Launch], which builds no
-	// CompositionInput at all) land on the right harness without a form.
+	// Empty sends no launch profile at all, which means no provider, which
+	// cairn refuses. That is deliberate rather than a gap -- see the
+	// package doc -- and it is why internal/launchprofile seeds a default.
+	// This package does not substitute one: a launcher that silently picked
+	// a provider would be inferring exactly the thing three components just
+	// agreed nobody infers.
 	//
-	// A value naming no harness Cairn knows is refused by Cairn, with a
-	// diagnostic listing what it does know. This package keeps no second
-	// list to disagree with that one (D8).
-	Provider string `json:"provider"`
+	// It is a NAME and never a path. The store resolves it, so nothing the
+	// frontend sends can point --with at an arbitrary file.
+	LaunchProfile string `json:"launchProfile"`
 
-	// Scope overrides the target's own scope. Empty leaves the target's
-	// resolved scope in force -- no --scope is sent at all, the same
-	// choice [launch] already makes for the plain Launch(name) path (see
-	// that function's own doc for why an unset override must stay unset
-	// rather than restate what Cairn already resolves on its own).
+	// Scope is the directory this instance works in: the selected
+	// project's path. Empty sends no --scope at all, which cairn accepts
+	// and which is right for a profile that holds no scope of its own.
+	//
+	// It can only come from here. Cairn refuses `scope:` as frontmatter --
+	// it is not one of the eight keys -- so a launch profile cannot carry
+	// one, and there is nothing left for this to override: it is the only
+	// source rather than a correction to another.
 	Scope string `json:"scope"`
 
 	// Sets are one-off --set slot=value overrides, applied in the order
@@ -274,9 +288,41 @@ func (s *Service) LaunchComposition(input CompositionInput) error {
 		return fmt.Errorf("launch: %w", err)
 	}
 
-	comp := compositionFromInput(input, bundleRoot, bootRoot)
+	launchPath, err := s.resolveLaunchProfile(input.LaunchProfile)
+	if err != nil {
+		return err
+	}
 
-	return runComposition(context.Background(), comp, bootRoot, boot.ExecRunner(cairnPath), boot.SpawnITerm2)
+	comp := compositionFromInput(input, bundleRoot, bootRoot, launchPath)
+
+	return runComposition(context.Background(), comp, boot.ExecRunner(cairnPath), boot.SpawnITerm2)
+}
+
+// resolveLaunchProfile turns a launch profile's NAME into the path
+// [compose.Composition.Parts] carries, or "" when the input named none.
+//
+// Resolving through the store rather than trusting a path from the frontend
+// is what keeps --with pointed inside Tachyon's own directory: the store
+// validates the name (internal/launchprofile.ValidateName) before it joins,
+// so no value crossing the Wails boundary can name a file outside it.
+//
+// A named profile that does not exist is an error and never a silent
+// fallback to the default. Falling back would launch a session under a
+// posture the person did not pick, and the two failures look identical
+// afterwards.
+func (s *Service) resolveLaunchProfile(name string) (string, error) {
+	if name == "" {
+		return "", nil
+	}
+	st, err := s.launchProfiles()
+	if err != nil {
+		return "", err
+	}
+	p, err := st.Get(name)
+	if err != nil {
+		return "", fmt.Errorf("launch: resolving launch profile %q: %w", name, err)
+	}
+	return p.Path, nil
 }
 
 // compositionFromInput builds the [compose.Composition] LaunchComposition
@@ -298,42 +344,39 @@ func (s *Service) LaunchComposition(input CompositionInput) error {
 // package doc's "additive only" section, and
 // TestCompositionFromInput_SkillsPassThroughUnmodified /
 // TestCompositionFromInput_PromptsPassThroughUnmodified.
-func compositionFromInput(input CompositionInput, bundleRoot, bootRoot string) compose.Composition {
+func compositionFromInput(input CompositionInput, bundleRoot, bootRoot, launchPath string) compose.Composition {
 	sets := make([]compose.Set, len(input.Sets))
 	for i, set := range input.Sets {
 		sets[i] = compose.Set{Slot: set.Slot, Value: set.Value}
 	}
 
+	parts := PartsWith(launchPath, input.Parts)
+
+	// The boot directory is <boot-root>/<project>/<profile>/<launch profile>,
+	// one segment per axis, and cairn plants the middle one itself: its own
+	// layout is <boot-root>/<target>/<session>, and the target IS the agent
+	// profile. So the project segment has to be folded into what cairn is
+	// given as its boot root, and the launch profile becomes its session.
+	//
+	// Grouping by project rather than by role is what makes the tree
+	// browsable: a person looks for "what is running on cairn", not "every
+	// scope engineer has ever been booted at".
+	//
+	// All three segments are deterministic, which is the property that
+	// matters: the same selection resolves to the same directory forever, so
+	// a harness accrues one ~/.claude.json trust entry per composition
+	// rather than one per launch. See boot.DefaultSession.
 	return compose.Composition{
 		Target:   input.Target,
 		Bundle:   bundleRoot,
-		Provider: input.Provider,
-		BootRoot: bootRoot,
+		BootRoot: boot.ProjectRoot(bootRoot, input.Scope),
+		Session:  boot.SessionKey(input.LaunchProfile),
 		Skills:   input.Skills,
 		Prompts:  input.Prompts,
 		Scope:    input.Scope,
 		Sets:     sets,
-		Parts:    input.Parts,
+		Parts:    parts,
 	}
-}
-
-// resolveBinding opens a [binding.Store] over the active bundle via
-// [binding.Open] -- the same constructor internal/binding.Service.open()
-// itself now calls, so this package keeps no copy of its own of the
-// bindings file's name (T24 closed that leak; see [binding.Open]'s doc) --
-// and looks name up in it, returning both the resolved binding and the
-// bundle root it came from, so Launch does not resolve the same root
-// twice (compose.Composition.Bundle needs it too).
-func (s *Service) resolveBinding(name string) (binding.Binding, string, error) {
-	root, err := s.store.Resolve()
-	if err != nil {
-		return binding.Binding{}, "", fmt.Errorf("launch: resolving bundle root: %w", err)
-	}
-	b, err := binding.Open(root).Get(name)
-	if err != nil {
-		return binding.Binding{}, "", fmt.Errorf("launch: resolving binding %q: %w", name, err)
-	}
-	return b, root, nil
 }
 
 // spawnFunc matches [boot.SpawnITerm2]'s signature -- the seam
@@ -342,47 +385,9 @@ func (s *Service) resolveBinding(name string) (binding.Binding, string, error) {
 // osascript.
 type spawnFunc func(argv []string, cwd string, env []string) error
 
-// launch is Launch's orchestration body once a binding is in hand: build
-// the minimal composition [Service.Launch] has always built (Target,
-// Bundle and BootRoot only -- Skills/Scope/Sets/Parts stay at their zero
-// value, matching Launch(name)'s own "just this binding, nothing added"
-// contract) and hand it to [runComposition]. Kept separate from the
-// Service method -- which also resolves the binding, the boot root and
-// the cairn path, none of which a unit test should have to touch -- so a
-// test can drive exactly this part with a fake runner and a fake spawn
-// func instead of a real cairn binary and a real terminal.
-//
-// b.Name becomes Composition.Target, not b.Profile: `cairn boot <name>`
-// resolves the binding itself, server-side, before this package's own
-// resolveBinding call ever runs -- via Cairn's own catalog package (a
-// directory of files read whole, per its own doc "the catalog is the
-// store"), which as of this writing already reads a bindings/ directory of
-// one file per binding directly off disk, not this package's single
-// bindings file (see internal/binding's doc on "the interface is the
-// contract, not the file format" for what this package reads instead, and
-// why, and CW-20260904-0002 / T23 for migrating this package's own reader
-// to match). Either way, that server-side resolution is precisely how b's
-// own Profile and Scope get resolved -- so Composition.Scope is
-// deliberately left at its zero value here rather than set from b.Scope.
-// Setting it would send an explicit --scope that
-// merely restates what Cairn already resolves on its own from the binding
-// it just looked up by name. cmd/tachyon's own Config.Scope (T11) makes
-// the identical choice: it leaves Scope empty by default, only ever
-// populating it from an explicit CLI override that this package's single
-// Launch(name) signature has no way to ask for.
-func launch(ctx context.Context, b binding.Binding, bundleRoot, bootRoot string, runner boot.Runner, spawn spawnFunc) error {
-	comp := compose.Composition{
-		Target:   b.Name,
-		Bundle:   bundleRoot,
-		BootRoot: bootRoot,
-	}
-	return runComposition(ctx, comp, bootRoot, runner, spawn)
-}
-
-// runComposition is the one orchestration core behind both [launch] (bare
-// Launch(name), a minimal Composition) and [Service.LaunchComposition]
-// (the palette's full compose form): clear whatever might already be
-// planted at comp.Target's boot directory, build the argv
+// runComposition is the orchestration core behind [Service.LaunchComposition]:
+// clear whatever might already be planted at this composition's boot
+// directory, build the argv
 // (internal/compose.Build), run cairn (internal/boot.Invoke), then act on
 // the report it printed -- resolve a cwd, build the provider's own flags
 // (internal/boot.HarnessArgv), prepend the harness binary [harnessBinary]
@@ -414,21 +419,39 @@ func launch(ctx context.Context, b binding.Binding, bundleRoot, bootRoot string,
 // planted is left where it is: the next launch of the same target moves it
 // aside (see boot.Prepare) rather than colliding with it.
 //
-// comp.Target is always used as [boot.Key]'s seed, unmodified. It may be a
-// saved binding name or, for a bindingless composition, a bare profile id;
-// either way the same target resolves to the same stable boot directory
-// regardless of what a particular launch also composes on top of it --
-// exactly the T10 stable-directory contract this package has relied on
-// since before this function had two callers.
-func runComposition(ctx context.Context, comp compose.Composition, bootRoot string, runner boot.Runner, spawn spawnFunc) error {
+// # The boot directory's identity is three segments, one per axis
+//
+//	<boot-root>/<project>/<profile>/<launch profile>
+//
+// comp.BootRoot already carries the project segment (see
+// [compositionFromInput]); comp.Target is [boot.Key]'s seed and is cairn's
+// own middle segment; comp.Session is the leaf.
+//
+// Only the middle one used to vary. A saved binding WAS the target, so
+// cairn's <boot-root>/<target>/<session> layout gave every binding its own
+// directory and the leaf could safely be a constant. With launch profiles
+// the target is always the bare agent profile, so `engineer` under two
+// launch profiles, or in two projects, is one target several times over --
+// and a fixed leaf would plant all of them in one directory, replanted out
+// from under whichever session got there first, with a settings document
+// granting the wrong scope.
+//
+// What has not changed is that every segment is STABLE for a given
+// composition, which is the T10 contract: the same selection resolves to the
+// same directory forever, so a harness accrues one ~/.claude.json trust
+// entry per composition rather than one per launch.
+func runComposition(ctx context.Context, comp compose.Composition, runner boot.Runner, spawn spawnFunc) error {
 	// Clear the target before cairn plants into it. cairn boot refuses an
 	// already-occupied Current (bootdir.PlantFiles's ErrExists) -- without
-	// this, only ever the very first launch of a given binding would
-	// succeed. Prepare renames any existing current aside rather than
+	// this, only ever the very first launch of a given composition would
+	// succeed. Prepare renames any existing directory aside rather than
 	// deleting it (T09), which is exactly the stable-directory contract
-	// this whole package's stable Composition.Target choice relies on: the
-	// same key T10 already proved reconciles with what cairn plants under.
-	if _, err := boot.Prepare(bootRoot, boot.Key(comp.Target)); err != nil {
+	// this package relies on: the same segments T10 already proved
+	// reconcile with what cairn plants under.
+	// comp.BootRoot already carries the project segment, so this prepares
+	// exactly the directory cairn is about to plant into: comp.BootRoot is
+	// what becomes --boot-root, and cairn appends <target>/<session> to it.
+	if _, err := boot.Prepare(comp.BootRoot, boot.Key(comp.Target), comp.Session); err != nil {
 		return fmt.Errorf("launch: preparing boot directory: %w", err)
 	}
 
@@ -508,4 +531,78 @@ func resolveCwd(result boot.Result) (string, error) {
 	default:
 		return "", fmt.Errorf("launch: unrecognized cwd_preference %q", result.CwdPreference)
 	}
+}
+
+// PartsWith puts a launch profile's path in front of a composition's own
+// --with parts.
+//
+// The launch profile goes FIRST, so everything the compose form adds layers
+// OVER it rather than under it. cairn folds parts closest-wins in the order
+// given, so a one-off --with meant to override the launch profile's provider
+// or settings has to come after it — and a person who adds a part for one
+// launch expects their addition to win over a stored default.
+//
+// It is exported because internal/preview must build the same list: a
+// preview that resolved a different set of parts than the launch would be a
+// preview of a different composition, which is the one thing a preview must
+// never be. An empty launchPath contributes nothing.
+func PartsWith(launchPath string, parts []string) []string {
+	out := make([]string, 0, len(parts)+1)
+	if launchPath != "" {
+		out = append(out, launchPath)
+	}
+	return append(out, parts...)
+}
+
+// Target is one agent profile the palette can launch: what the session IS,
+// as distinct from the launch profile that says how it runs.
+type Target struct {
+	// ID is the boot target — the positional argument to `cairn boot`.
+	ID string `json:"id"`
+	// Name and Description are the profile's own frontmatter, for the row.
+	// Empty when the profile declares none.
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// Targets lists the agent profiles in the active bundle that can be booted,
+// sorted by id.
+//
+// Abstract profiles are excluded. Cairn refuses to boot one — base is
+// "extended rather than booted" — so offering it produces a refusal a person
+// cannot act on, and cairn's own `list` makes the same split.
+//
+// Parts are NOT excluded, which is deliberate and is cairn's rule rather
+// than a convenience: "a part is an ordinary profile, so anything composable
+// is also bootable and inspectable on its own." A launcher that hid them
+// would be inventing a distinction the catalog does not make.
+//
+// Nothing here reads a provider, and there is nothing to read: no profile in
+// agent-setup declares one. What makes a target launchable is the launch
+// profile chosen beside it.
+func (s *Service) Targets() ([]Target, error) {
+	root, err := s.store.Resolve()
+	if err != nil {
+		return nil, fmt.Errorf("launch: resolving bundle root: %w", err)
+	}
+	b, err := bundle.Open(root)
+	if err != nil {
+		return nil, fmt.Errorf("launch: opening bundle %s: %w", root, err)
+	}
+	profiles, err := b.Profiles()
+	if err != nil {
+		return nil, fmt.Errorf("launch: reading profiles from %s: %w", root, err)
+	}
+	out := make([]Target, 0, len(profiles))
+	for _, p := range profiles {
+		if p.Header.Abstract {
+			continue
+		}
+		out = append(out, Target{
+			ID:          string(p.ID),
+			Name:        p.Header.Name,
+			Description: p.Header.Description,
+		})
+	}
+	return out, nil
 }

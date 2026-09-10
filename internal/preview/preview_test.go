@@ -42,23 +42,29 @@ func validShow(skills string) []byte {
 }
 
 func TestBuildArgvExactAndOrdered(t *testing.T) {
+	const launchPath = "/config/tachyon/launch/default.md"
 	input := CompositionInput{
-		Target:  "saved-binding",
-		Parts:   []string{"observability", "review-policy"},
-		Skills:  []string{"test-first", "commit"},
-		Prompts: []string{"report", "handoff"},
+		Target:        "engineer",
+		LaunchProfile: "default",
+		Parts:         []string{"observability", "review-policy"},
+		Skills:        []string{"test-first", "commit"},
+		Prompts:       []string{"report", "handoff"},
 		Sets: []launch.SetInput{
 			{Slot: "tone", Value: "terse"},
 			{Slot: "audience", Value: "team"},
 		},
 		Scope: "/work/tachyon",
 	}
-	got, err := buildArgv(input, "/active/bundle")
+	got, err := buildArgv(input, "/active/bundle", launchPath)
 	if err != nil {
 		t.Fatalf("buildArgv: %v", err)
 	}
 	want := []string{
-		"show", "saved-binding", "--profile", "/active/bundle",
+		"show", "engineer", "--profile", "/active/bundle",
+		// The launch profile first, exactly where a launch puts it: a
+		// preview that resolved a different set of parts than the launch
+		// would be a preview of a different composition.
+		"--with", launchPath,
 		"--with", "observability", "--with", "review-policy",
 		"--skill", "test-first,commit", "--prompt", "report,handoff",
 		"--set", "tone=terse", "--set", "audience=team",
@@ -75,55 +81,84 @@ func TestPreviewAndBootShareCanonicalCompositionSubsequence(t *testing.T) {
 		Skills: []string{"s1", "s2"}, Prompts: []string{"p1", "p2"},
 		Sets: []launch.SetInput{{Slot: "role", Value: "reviewer"}}, Scope: "/scope",
 	}
-	show, err := buildArgv(input, "/bundle")
+	const launchPath = "/config/tachyon/launch/default.md"
+	show, err := buildArgv(input, "/bundle", launchPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	boot, err := compose.Build(compose.Composition{
 		Target: input.Target, Bundle: "/bundle", BootRoot: "/state/boot",
-		Parts: input.Parts, Skills: input.Skills, Prompts: input.Prompts,
+		Parts:  launch.PartsWith(launchPath, input.Parts),
+		Skills: input.Skills, Prompts: input.Prompts,
 		Sets: []compose.Set{{Slot: "role", Value: "reviewer"}}, Scope: input.Scope,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Both argvs are <verb> <common...> --json, with boot inserting
+	// --boot-root in the middle. Compare the common parts by dropping the
+	// verb and the trailing --json from each, and --boot-root's pair from
+	// boot -- found by name rather than by index, so an added boot-only
+	// flag does not silently shift this comparison onto the wrong tokens.
 	showCommon := show[1 : len(show)-1]
-	bootCommon := append([]string{}, boot[1:4]...)
-	bootCommon = append(bootCommon, boot[8:len(boot)-1]...)
+	bootCommon := dropFlagPair(boot[1:len(boot)-1], "--boot-root")
 	if !reflect.DeepEqual(showCommon, bootCommon) {
 		t.Fatalf("show common args = %#v\nboot common args = %#v", showCommon, bootCommon)
 	}
-	for _, forbidden := range []string{"--boot-root", "--session", "--save-as"} {
+	for _, forbidden := range []string{"--boot-root", "--session", "--save-as", "--provider"} {
 		if contains(show, forbidden) {
 			t.Errorf("preview argv contains boot/save-only flag %s: %v", forbidden, show)
 		}
 	}
 }
 
-func TestSavedBindingPreviewTargetsBindingAndSendsOnlyModalAdditions(t *testing.T) {
+// dropFlagPair removes flag and the value after it from argv.
+func dropFlagPair(argv []string, flag string) []string {
+	out := make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		if argv[i] == flag {
+			i++ // skip its value too
+			continue
+		}
+		out = append(out, argv[i])
+	}
+	return out
+}
+
+// TestPreviewSendsOnlyWhatTheFormAdded: the preview forwards the launch
+// profile and the modal's own additions, and never flattens what either of
+// them already resolves to. cairn resolves the cascade; a launcher that
+// pre-expanded it would be sending a second, necessarily-stale copy.
+func TestPreviewSendsOnlyWhatTheFormAdded(t *testing.T) {
+	const launchPath = "/config/tachyon/launch/codex.md"
 	got, err := buildArgv(CompositionInput{
-		Target: "eng-tachyon", Parts: []string{"modal-part"}, Skills: []string{"modal-skill"},
-	}, "/bundle")
+		Target: "engineer", LaunchProfile: "codex",
+		Parts: []string{"modal-part"}, Skills: []string{"modal-skill"},
+	}, "/bundle", launchPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"show", "eng-tachyon", "--profile", "/bundle", "--with", "modal-part", "--skill", "modal-skill", "--json"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("saved-binding argv = %v; want %v", got, want)
+	want := []string{
+		"show", "engineer", "--profile", "/bundle",
+		"--with", launchPath, "--with", "modal-part",
+		"--skill", "modal-skill", "--json",
 	}
-	for _, savedMember := range []string{"engineer", "saved-part", "saved-skill"} {
-		if contains(got, savedMember) {
-			t.Errorf("saved-binding preview flattened/resubmitted %q: %v", savedMember, got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %v; want %v", got, want)
+	}
+	for _, resolved := range []string{"base", "search-first", "surface-discovery", "claude", "codex"} {
+		if contains(got, resolved) {
+			t.Errorf("preview flattened/resubmitted %q, which cairn resolves itself: %v", resolved, got)
 		}
 	}
 }
 
 func TestBuildArgvOmitsEveryEmptyOptional(t *testing.T) {
-	got, err := buildArgv(CompositionInput{Target: "saved-default-scope"}, "/bundle")
+	got, err := buildArgv(CompositionInput{Target: "engineer"}, "/bundle", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"show", "saved-default-scope", "--profile", "/bundle", "--json"}
+	want := []string{"show", "engineer", "--profile", "/bundle", "--json"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("minimal preview = %v; want %v", got, want)
 	}

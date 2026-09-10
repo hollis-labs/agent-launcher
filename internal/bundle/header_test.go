@@ -28,7 +28,7 @@ func TestScanHeader(t *testing.T) {
 	}, {
 		name: "comments and blank lines inside the block",
 		in:   "---\n# a comment\n\nid: base\n\n# another\nabstract: true\nname: Floor\n---\n",
-		want: bundle.Header{Present: true, ID: "base", Name: "Floor"},
+		want: bundle.Header{Present: true, ID: "base", Name: "Floor", Abstract: true},
 	}, {
 		// The reason the scan refuses to descend: spec.slots has a name too,
 		// and it is not the profile's name.
@@ -109,5 +109,33 @@ func TestScanHeader(t *testing.T) {
 				t.Fatalf("ScanHeader = %+v; want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestScanHeaderAbstract pins the one key added for the launcher: a palette
+// must be able to keep an abstract profile out of a list of things to boot,
+// because cairn refuses one and the refusal is not something a person can
+// act on.
+//
+// Anything but a recognized true reads as false, including an absent key.
+// That is the safe direction: a value this scanner does not recognize leaves
+// the profile bootable, and cairn refuses it with its own diagnostic either
+// way — where the opposite mistake hides a bootable profile from the palette
+// with nothing said.
+func TestScanHeaderAbstract(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{"---\nid: base\nabstract: true\n---\n", true},
+		{"---\nid: base\nabstract: yes\n---\n", true},
+		{"---\nid: base\nabstract: false\n---\n", false},
+		{"---\nid: base\n---\n", false},
+		{"---\nid: base\nabstract: \"true\"\n---\n", true},
+		{"---\nid: base\nabstract: maybe\n---\n", false},
+	} {
+		if got := bundle.ScanHeader([]byte(tc.in)).Abstract; got != tc.want {
+			t.Errorf("ScanHeader(%q).Abstract = %v; want %v", tc.in, got, tc.want)
+		}
 	}
 }

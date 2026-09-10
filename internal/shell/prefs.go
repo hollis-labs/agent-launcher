@@ -147,15 +147,17 @@ type Store struct {
 }
 
 // DefaultPrefsPath is where the shell keeps its preferences:
-// internal/state's state root ([state.Root]) plus "shell.json". On macOS
-// that root resolves under ~/Library/Application Support, which is where a
-// GUI app's own state belongs. Note this is deliberately NOT inside the
-// agent-setup bundle: the bundle is content under git, and shell preferences
-// are neither.
+// internal/state's config root ([state.ConfigDir]) plus "shell.json" --
+// ~/.config/tachyon/shell.json. It is config rather than state because the
+// hotkey is a choice a person made and may well want to edit by hand; the
+// window geometry rides along beside it because splitting one small file in
+// two to separate them would cost more than it explains. Note this is
+// deliberately NOT inside the agent-setup bundle: the bundle is content
+// under git, and shell preferences are neither.
 func DefaultPrefsPath() (string, error) {
-	root, err := state.Root()
+	root, err := state.ConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("locating state root: %w", err)
+		return "", fmt.Errorf("locating config dir: %w", err)
 	}
 	return filepath.Join(root, "shell.json"), nil
 }

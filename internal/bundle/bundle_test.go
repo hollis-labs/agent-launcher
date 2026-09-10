@@ -43,7 +43,7 @@ func TestOpenMakesTheRootAbsolute(t *testing.T) {
 	}
 }
 
-func TestEnumeratesAllSevenKinds(t *testing.T) {
+func TestEnumeratesAllFiveKinds(t *testing.T) {
 	b := openFixture(t)
 	c, err := b.Contents()
 	if err != nil {
@@ -56,18 +56,15 @@ func TestEnumeratesAllSevenKinds(t *testing.T) {
 	}
 	wantEqual(t, "profiles", profiles, []string{"architect", "base", "engineer", "headerless", "quoted"})
 
-	prose := make([]string, 0, len(c.RoleProse))
-	for _, r := range c.RoleProse {
-		prose = append(prose, string(r.Role))
-	}
-	wantEqual(t, "role prose", prose, []string{"architect", "engineer"})
-
 	templates := make([]string, 0, len(c.Templates))
 	for _, tpl := range c.Templates {
 		templates = append(templates, string(tpl.ID))
 	}
-	// roles/ is a directory, not a template; .hidden-note.md is a dotfile.
-	wantEqual(t, "templates", templates, []string{"agents", "claude"})
+	// Nested templates enumerate at any depth, and a nested id carries its
+	// own path — which is what makes it addressable, since a bare basename
+	// would collide the moment two directories hold the same name.
+	// .hidden-note.md is a dotfile and stays out.
+	wantEqual(t, "templates", templates, []string{"agents", "claude", "lenses/architect", "lenses/engineer", "projects/deep"})
 
 	prompts := make([]string, 0, len(c.Prompts))
 	for _, p := range c.Prompts {
@@ -88,64 +85,48 @@ func TestEnumeratesAllSevenKinds(t *testing.T) {
 	// hooks/README.md is not a hook.
 	wantEqual(t, "hooks", hooks, []string{"session-start", "stop-disposition"})
 
-	bindings := make([]string, 0, len(c.Bindings))
-	for _, bd := range c.Bindings {
-		bindings = append(bindings, string(bd.Name))
-	}
-	// A binding id keeps its extension, and bindings/nested/ is not descended.
-	wantEqual(t, "bindings", bindings, []string{"chrispian.json", "eng-tachyon.yaml"})
 }
 
-// TestProfileAndRoleProseCollideOnEveryName is the reason the two are separate
-// types. In the live bundle the collision is total: all eight role prose files
-// share a basename with a profile.
-func TestProfileAndRoleProseCollideOnEveryName(t *testing.T) {
+// TestNestedTemplatesAreAddressableByPath is what replaced the role-prose
+// collision test.
+//
+// templates/roles/*.md was its own kind precisely because every one of its
+// files shared a basename with a profile, and an id alone could not name a
+// file. That kind retired with the directory, and the same hazard came
+// straight back one level down: templates/ now holds lenses/ and projects/,
+// and nothing stops two of them holding the same basename. The id carrying
+// its own path is what answers it, so this test pins that rather than the
+// collision it used to.
+func TestNestedTemplatesAreAddressableByPath(t *testing.T) {
 	b := openFixture(t)
-	profiles, err := b.Profiles()
-	if err != nil {
-		t.Fatalf("Profiles: %v", err)
-	}
-	prose, err := b.RoleProse()
-	if err != nil {
-		t.Fatalf("RoleProse: %v", err)
+
+	nested := bundle.Ref{Kind: bundle.KindTemplate, ID: "lenses/architect"}
+	top := bundle.Ref{Kind: bundle.KindTemplate, ID: "architect"}
+	if nested == top {
+		t.Fatal("a nested template ref equals the bare basename ref")
 	}
 
-	byName := map[string]bool{}
-	for _, p := range profiles {
-		byName[string(p.ID)] = true
+	nestedPath, err := b.Resolve(nested)
+	if err != nil {
+		t.Fatalf("Resolve(%+v): %v", nested, err)
 	}
-	collisions := 0
-	for _, r := range prose {
-		if byName[string(r.Role)] {
-			collisions++
-		}
-	}
-	if collisions != len(prose) {
-		t.Fatalf("%d of %d role prose names collide with a profile; the fixture must reproduce the total collision", collisions, len(prose))
+	if got, want := filepath.ToSlash(nestedPath), "templates/lenses/architect.md"; !hasSuffix(got, want) {
+		t.Fatalf("nested template resolved to %q; want a path ending %q", got, want)
 	}
 
-	// Same name, different refs, different files.
-	pRef := bundle.Ref{Kind: bundle.KindProfile, ID: "architect"}
-	rRef := bundle.Ref{Kind: bundle.KindRoleProse, ID: "architect"}
-	if pRef == rRef {
-		t.Fatal("a profile ref equals a role prose ref of the same name")
+	// The bare basename names nothing: there is no templates/architect.md,
+	// and resolution must not fall back to the nested one.
+	if _, err := b.Resolve(top); !errors.Is(err, bundle.ErrNotFound) {
+		t.Fatalf("Resolve(bare %q) = %v; want ErrNotFound rather than a fallback to the nested file", top.ID, err)
 	}
-	pPath, err := b.Resolve(pRef)
+
+	// And a profile of the same name is still a different artifact.
+	profilePath, err := b.Resolve(bundle.Ref{Kind: bundle.KindProfile, ID: "architect"})
 	if err != nil {
 		t.Fatalf("Resolve(profile architect): %v", err)
 	}
-	rPath, err := b.Resolve(rRef)
-	if err != nil {
-		t.Fatalf("Resolve(role prose architect): %v", err)
-	}
-	if pPath == rPath {
-		t.Fatalf("both architect refs resolved to %s", pPath)
-	}
-	if got, want := filepath.ToSlash(pPath), "profiles/architect.md"; !hasSuffix(got, want) {
-		t.Fatalf("profile architect resolved to %q; want a path ending %q", got, want)
-	}
-	if got, want := filepath.ToSlash(rPath), "templates/roles/architect.md"; !hasSuffix(got, want) {
-		t.Fatalf("role prose architect resolved to %q; want a path ending %q", got, want)
+	if profilePath == nestedPath {
+		t.Fatalf("both architect refs resolved to %s", profilePath)
 	}
 }
 
@@ -163,7 +144,8 @@ func TestProfileHeadersAreReadForDisplay(t *testing.T) {
 	want := map[string]bundle.Header{
 		"architect": {Present: true, ID: "architect", Name: "Architect", Extends: "base",
 			Description: "Decides structure and boundaries, including what they rule out."},
-		"base": {Present: true, ID: "base", Name: "Fixture Base"},
+		// The fixture's base declares abstract: true, as the live one does.
+		"base": {Present: true, ID: "base", Name: "Fixture Base", Abstract: true},
 		"engineer": {Present: true, ID: "engineer", Name: "Engineer", Extends: "base",
 			Description: "Implements one task end to end."},
 		"quoted": {Present: true, ID: "quoted", Name: "A name: with a colon", Extends: "base",
@@ -215,9 +197,9 @@ func TestSkillsReportExistenceRatherThanEnforcingIt(t *testing.T) {
 	}
 }
 
-// TestMissingDirectoriesEnumerateEmpty covers bindings/ in particular: the
-// directory does not exist in the live bundle, its format is not pinned by
-// Cairn, and an absent directory must read as "nothing here", not as a fault.
+// TestMissingDirectoriesEnumerateEmpty: an absent artifact directory reads
+// as "nothing here", not as a fault. Only the root's own absence is an
+// error — see ErrRootMissing.
 func TestMissingDirectoriesEnumerateEmpty(t *testing.T) {
 	b, err := bundle.Open("testdata/minimal")
 	if err != nil {
@@ -231,20 +213,18 @@ func TestMissingDirectoriesEnumerateEmpty(t *testing.T) {
 		t.Fatalf("profiles = %d; want 1", len(c.Profiles))
 	}
 	for name, n := range map[string]int{
-		"role prose": len(c.RoleProse),
-		"templates":  len(c.Templates),
-		"prompts":    len(c.Prompts),
-		"skills":     len(c.Skills),
-		"hooks":      len(c.Hooks),
-		"bindings":   len(c.Bindings),
+		"templates": len(c.Templates),
+		"prompts":   len(c.Prompts),
+		"skills":    len(c.Skills),
+		"hooks":     len(c.Hooks),
 	} {
 		if n != 0 {
 			t.Errorf("%s = %d; want 0", name, n)
 		}
 	}
 	// Non-nil, so a caller can range without a nil check.
-	if c.Bindings == nil {
-		t.Error("Bindings is nil; want an empty slice")
+	if c.Templates == nil {
+		t.Error("Templates is nil; want an empty slice")
 	}
 }
 
@@ -253,11 +233,11 @@ func TestReadRejectsUnknownAndEscapingRefs(t *testing.T) {
 	cases := []bundle.Ref{
 		{Kind: bundle.KindProfile, ID: "nope"},
 		{Kind: bundle.KindProfile, ID: "../../go"},
-		{Kind: bundle.KindRoleProse, ID: "../agents"},
-		{Kind: bundle.KindTemplate, ID: "roles/architect"},
+		{Kind: bundle.KindTemplate, ID: "../agents"},
+		{Kind: bundle.KindTemplate, ID: "lenses/../../go"},
+		{Kind: bundle.KindTemplate, ID: "nope/architect"},
 		{Kind: bundle.KindPrompt, ID: "../report"},
 		{Kind: bundle.KindHook, ID: "README"},
-		{Kind: bundle.KindBinding, ID: "nested/inner.yaml"},
 		{Kind: bundle.KindSkill, ID: ".."},
 	}
 	for _, ref := range cases {
@@ -307,8 +287,8 @@ func TestExpandRootHandlesTilde(t *testing.T) {
 
 func TestKindsCoversEveryKind(t *testing.T) {
 	kinds := bundle.Kinds()
-	if len(kinds) != 7 {
-		t.Fatalf("Kinds() has %d entries; the bundle has seven artifact kinds", len(kinds))
+	if len(kinds) != 5 {
+		t.Fatalf("Kinds() has %d entries; the bundle has five artifact kinds", len(kinds))
 	}
 	seen := map[bundle.Kind]bool{}
 	for _, k := range kinds {
@@ -318,8 +298,8 @@ func TestKindsCoversEveryKind(t *testing.T) {
 		seen[k] = true
 	}
 	for _, k := range []bundle.Kind{
-		bundle.KindProfile, bundle.KindRoleProse, bundle.KindTemplate, bundle.KindPrompt,
-		bundle.KindSkill, bundle.KindHook, bundle.KindBinding,
+		bundle.KindProfile, bundle.KindTemplate, bundle.KindPrompt,
+		bundle.KindSkill, bundle.KindHook,
 	} {
 		if !seen[k] {
 			t.Errorf("Kinds() omits %q", k)

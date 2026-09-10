@@ -34,13 +34,14 @@ const ProjectDirPlaceholder = "{{.ProjectDir}}"
 // cairn repo, and examples/README.md §5): flat, snake_case, every key
 // present on every successful boot. Cairn's contract is that new keys are
 // free and a rename is breaking, so this struct names the keys Tachyon
-// reads and silently ignores the ones it does not (saved_binding_path and
-// saved_dropped_sets describe a --save-as this launcher never passes).
+// reads and silently ignores the ones it does not (profile_root describes
+// the bundle a boot was composed out of, which this launcher already knows
+// because it passed it).
 //
 // Scope, SettingsPath and ProjectDirArg are nil-able (a pointer or a nil
 // slice) because Cairn's own contract makes null meaningful and distinct
-// from the zero value of the underlying type: Scope nil means the binding
-// declared no scope and none was given on the command line; SettingsPath
+// from the zero value of the underlying type: Scope nil means no --scope
+// was given, because no project was selected; SettingsPath
 // nil means the render produced no file at the harness's settings path (a
 // real case — a profile with no spec.settings and nothing to grant
 // produces none); ProjectDirArg nil means this provider needs no flag at
@@ -60,14 +61,14 @@ type Result struct {
 	Provider string `json:"provider"`
 
 	// Scope is the directory the instance works in, absolute and
-	// symlink-resolved, or nil when the binding declared none and no
-	// --scope was given.
+	// symlink-resolved, or nil when no --scope was given.
 	Scope *string `json:"scope"`
 
 	// SettingsPath is the absolute path of the file at the harness's
-	// settings path, or nil when the render produced none.
-	// [HarnessArgv] deliberately does not read this field — see its doc
-	// comment.
+	// settings path, or nil when the render produced none. [HarnessArgv]
+	// prefers it over its own join, and falls back when it is nil — see
+	// that function's doc for why the preference and the fallback answer
+	// two different questions.
 	SettingsPath *string `json:"settings_path"`
 
 	// CwdPreference is where the harness expects to be invoked: "boot_dir"
@@ -183,18 +184,31 @@ func (r Result) ProjectDirArgv() []string {
 //
 // # Claude Code: --settings, unconditional and permanent
 //
-// --settings <BootDir>/.claude/settings.json is computed directly from
-// result.BootDir joined with the fixed ".claude/settings.json" relative
-// path — never read from Result.SettingsPath, which Cairn's own contract
-// allows to be nil. A settings.json merely sitting in the boot directory is
-// read as the untrusted "projectSettings" tier and defaultMode: auto is
-// silently refused there; passing --settings is what promotes it to the
-// trusted "flagSettings" tier, which is what makes Tachyon's auto mode
-// survive at all. No future task may drop this flag — see
-// TestHarnessArgv_AlwaysIncludesSettingsFlag, a permanent regression guard,
-// and CW-20260903-0014's hazard section for the full argument. Adding Codex
-// did not weaken it: the Claude branch below is byte-for-byte what this
-// function returned when it had no branches.
+// The flag is ALWAYS emitted. A settings.json merely sitting in the boot
+// directory is read as the untrusted "projectSettings" tier and
+// defaultMode: auto is silently refused there; passing --settings is what
+// promotes it to the trusted "flagSettings" tier, which is what makes
+// Tachyon's auto mode survive at all. No future task may drop this flag —
+// see TestHarnessArgv_AlwaysIncludesSettingsFlag, a permanent regression
+// guard, and CW-20260903-0014's hazard section for the full argument.
+//
+// Which PATH it names is a separate question from whether it appears, and
+// the two were conflated while there was only one answer. Result.SettingsPath
+// is what cairn reports it actually rendered, and it is preferred; the
+// <BootDir>/.claude/settings.json join is the fallback for the case cairn's
+// contract explicitly allows, SettingsPath being null because the render
+// produced no file there.
+//
+// The order matters in one direction only. Gating the flag on SettingsPath
+// would drop it whenever cairn rendered nothing — silently downgrading the
+// launch, which is the whole hazard. Preferring the reported path when there
+// IS one costs nothing and closes a different gap: cairn moved every
+// harness's paths out of Go and into bootdir/layouts/<provider>.yaml
+// precisely so a path is data, and a hardcoded join here is Tachyon holding
+// a second copy of one of those documents. If the Claude layout ever moves
+// that file, settings_path follows it and the join does not — and the
+// permanent guard would keep passing, because it asserts the flag is
+// present, not that it names something real.
 //
 // Claude Code deliberately gets no project-dir flag (--add-dir): the human
 // gate on spec.access.directories settled that it is redundant for any
@@ -221,6 +235,9 @@ func HarnessArgv(result Result) ([]string, error) {
 	switch result.Provider {
 	case ProviderClaude:
 		settingsPath := filepath.Join(result.BootDir, ".claude", "settings.json")
+		if result.SettingsPath != nil && *result.SettingsPath != "" {
+			settingsPath = *result.SettingsPath
+		}
 		return []string{"--settings", settingsPath}, nil
 	case ProviderCodex:
 		return result.ProjectDirArgv(), nil

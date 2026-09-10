@@ -114,7 +114,10 @@ func treeHasProfile(t *testing.T, svc *manager.Service, id string) bool {
 func TestPartCreationAndAutocompleteFrontendContract(t *testing.T) {
 	newArtifact := readManagerFrontend(t, "NewArtifact.jsx")
 	for _, want := range []string{
-		`["profile", "part", "role-prose"`,
+		// "part" sits next to "profile" because it is a placement intent
+		// rather than a bundle kind — the assertion is on that adjacency,
+		// not on the whole list, which changes when a kind retires.
+		`["profile", "part",`,
 		`k === "part" ? "profile" : k`,
 		`kind === "part"`,
 		`ManagerAPI.NewPart(id.trim())`,
@@ -135,10 +138,10 @@ func TestPartCreationAndAutocompleteFrontendContract(t *testing.T) {
 			t.Errorf("Palette.jsx is missing unified profile/part autocomplete contract %q", want)
 		}
 	}
-	composer := readManagerFrontend(t, "BindingComposer.jsx")
+	composer := readManagerFrontend(t, "LaunchProfileComposer.jsx")
 	for _, want := range []string{`const profiles = groups.profile ?? []`, `suggestions={profiles}`} {
 		if !strings.Contains(composer, want) {
-			t.Errorf("BindingComposer.jsx is missing unified profile/part autocomplete contract %q", want)
+			t.Errorf("LaunchProfileComposer.jsx is missing unified profile/part autocomplete contract %q", want)
 		}
 	}
 }

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/hollis-labs/tachyon/internal/boot"
-	"github.com/hollis-labs/tachyon/internal/testbundle"
+	"github.com/hollis-labs/tachyon/internal/launchprofile"
 )
 
 // TestRunAgainstRealCairn exercises this command's own [Run] end to end
@@ -24,14 +24,12 @@ import (
 // It skips, with a message saying why, only when a prerequisite is
 // genuinely absent from the machine running it: cairn not on PATH, or the
 // ~/dev/projects/agent-setup bundle itself not present at all. A bundle
-// that IS present but whose bindings this build of Tachyon cannot read —
-// missing, unreadable, or in a shape it does not understand — is a
-// different condition and FAILS the test instead; see
-// [testbundle.Resolve] for that distinction (the same one
-// internal/boot/reconcile_test.go relies on), proven directly by
-// internal/testbundle's own unit tests. Nothing here writes into that
-// bundle — --profile only reads it — and every path this test writes to
-// lives under its own t.TempDir() boot root.
+// that IS present but missing the profile this test names is a different
+// condition and FAILS instead — the same distinction
+// internal/boot/reconcile_test.go relies on, and the one that caught
+// agent-setup retiring bindings/ out from under Tachyon. Nothing here
+// writes into that bundle — --profile only reads it — and every path this
+// test writes to lives under its own t.TempDir() boot root.
 func TestRunAgainstRealCairn(t *testing.T) {
 	cairnPath, err := exec.LookPath("cairn")
 	if err != nil {
@@ -44,32 +42,32 @@ func TestRunAgainstRealCairn(t *testing.T) {
 	}
 	bundleRoot := filepath.Join(home, "dev", "projects", "agent-setup")
 
-	bindings, skip, err := testbundle.Resolve(bundleRoot)
-	if skip {
+	if _, statErr := os.Stat(bundleRoot); statErr != nil {
 		t.Skipf("no bundle at %s (agent-setup not present on this machine), skipping the real-binary check", bundleRoot)
 	}
-	if err != nil {
-		t.Fatalf("bundle at %s is present but its bindings cannot be read -- this is exactly the break CW-20260904-0003 (T24) exists to catch loudly, not silence: %v", bundleRoot, err)
+
+	const target = "engineer"
+	if _, statErr := os.Stat(filepath.Join(bundleRoot, "profiles", target+".md")); statErr != nil {
+		t.Fatalf("the bundle at %s is present but has no profiles/%s.md (%v) -- update this test's target, or the bundle", bundleRoot, target, statErr)
 	}
 
-	// eng-nanite was a saved binding in agent-setup's bindings storage as of
-	// 2026-09-03 — see internal/boot/reconcile_test.go, which relies on the
-	// same binding for the same reason, and the guard above (which now
-	// fails loudly, not silently, once that stops being true) rather than
-	// this comment for the current state.
-	const target = "eng-nanite"
-	found := false
-	for _, b := range bindings {
-		if b.Name == target {
-			found = true
-			break
-		}
+	// The launch profile is what declares the provider. Without one cairn
+	// refuses the render outright, since no profile in agent-setup names a
+	// provider any more — so this is also the check that --launch-profile
+	// reaches cairn as a --with.
+	launchStore := launchprofile.Open(t.TempDir())
+	launchProfile, err := launchStore.Create("debug", launchprofile.Scaffold("debug", "claude"))
+	if err != nil {
+		t.Fatalf("writing the launch profile: %v", err)
 	}
-	if !found {
-		t.Fatalf("bundle at %s is readable but has no binding named %q -- update this test's target, or the bundle", bundleRoot, target)
-	}
+
 	scratchRoot := t.TempDir()
-	cfg := Config{Target: target, Bundle: bundleRoot, BootRoot: scratchRoot}
+	cfg := Config{
+		Target:        target,
+		Bundle:        bundleRoot,
+		BootRoot:      scratchRoot,
+		LaunchProfile: launchProfile.Path,
+	}
 	runner := boot.ExecRunner(cairnPath)
 
 	report, err := Run(context.Background(), cfg, runner)
@@ -81,7 +79,7 @@ func TestRunAgainstRealCairn(t *testing.T) {
 	}
 	if report.Result.BootDir != report.ExpectedBootDir {
 		t.Fatalf(
-			"boot.Key/CurrentPath disagree with cairn's actual boot_dir (see internal/boot/reconcile_test.go):\n"+
+			"boot.Key/SessionKey/SessionPath disagree with cairn's actual boot_dir (see internal/boot/reconcile_test.go):\n"+
 				"  expected %q\n  got      %q",
 			report.ExpectedBootDir, report.Result.BootDir,
 		)

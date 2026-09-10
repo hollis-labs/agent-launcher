@@ -6,69 +6,96 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hollis-labs/go-apppaths/paths"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/shell"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
 
-// TestDirDefaultsToOSUserConfigDir proves that, absent an override, [state.Dir]
-// returns exactly what os.UserConfigDir() returns — Dir does not change
-// default behavior, only add an override on top of it.
-func TestDirDefaultsToOSUserConfigDir(t *testing.T) {
+// TestRootsFollowXDG proves the two roots are go-apppaths', not
+// os.UserConfigDir()'s. The distinction is the whole point of the move: on
+// macOS os.UserConfigDir() is ~/Library/Application Support, and both roots
+// used to resolve under it.
+func TestRootsFollowXDG(t *testing.T) {
 	t.Setenv(state.DirEnv, "")
 
-	want, err := os.UserConfigDir()
+	layout, err := paths.Resolve("tachyon", paths.WithoutMaterialize())
 	if err != nil {
-		t.Skipf("no user config dir on this machine: %v", err)
+		t.Skipf("cannot resolve app paths on this machine: %v", err)
 	}
-	got, err := state.Dir()
+
+	config, err := state.ConfigDir()
 	if err != nil {
-		t.Fatalf("Dir: %v", err)
+		t.Fatalf("ConfigDir: %v", err)
 	}
-	if got != want {
-		t.Fatalf("Dir() = %q; want os.UserConfigDir()'s %q", got, want)
+	if config != layout.ConfigDir() {
+		t.Fatalf("ConfigDir() = %q; want go-apppaths' %q", config, layout.ConfigDir())
+	}
+
+	stateDir, err := state.StateDir()
+	if err != nil {
+		t.Fatalf("StateDir: %v", err)
+	}
+	if stateDir != layout.StateDir() {
+		t.Fatalf("StateDir() = %q; want go-apppaths' %q", stateDir, layout.StateDir())
 	}
 }
 
-// TestDirOverride is the override mechanism itself: setting DirEnv redirects
-// Dir entirely, without touching the real per-user config directory.
-func TestDirOverride(t *testing.T) {
+// TestConfigAndStateAreDistinct is the split itself. A launch profile a
+// person edits and a boot directory Tachyon regenerates must not share a
+// tree, or "back this up" and "delete this safely" have no answer. Checked
+// with the override set, so it holds on any machine.
+func TestConfigAndStateAreDistinct(t *testing.T) {
+	override := t.TempDir()
+	t.Setenv(state.DirEnv, override)
+
+	config, err := state.ConfigDir()
+	if err != nil {
+		t.Fatalf("ConfigDir: %v", err)
+	}
+	stateDir, err := state.StateDir()
+	if err != nil {
+		t.Fatalf("StateDir: %v", err)
+	}
+
+	if config == stateDir {
+		t.Fatalf("ConfigDir() and StateDir() are the same directory (%q); the override must redirect the roots, not collapse them", config)
+	}
+	if strings.HasPrefix(config, stateDir+string(filepath.Separator)) ||
+		strings.HasPrefix(stateDir, config+string(filepath.Separator)) {
+		t.Fatalf("one root nests inside the other: config %q, state %q", config, stateDir)
+	}
+}
+
+// TestOverrideRedirectsBothRoots is the override mechanism: setting DirEnv
+// moves both roots under it, without touching the real per-user
+// directories.
+func TestOverrideRedirectsBothRoots(t *testing.T) {
 	override := filepath.Join(t.TempDir(), "somewhere-else")
 	t.Setenv(state.DirEnv, override)
 
-	got, err := state.Dir()
-	if err != nil {
-		t.Fatalf("Dir: %v", err)
-	}
-	if got != override {
-		t.Fatalf("Dir() with %s=%q = %q; want %q", state.DirEnv, override, got, override)
-	}
-}
-
-// TestRootIsDirPlusTachyon pins the shape Root builds on top of Dir, using
-// the override so the test needs no real per-user config directory.
-func TestRootIsDirPlusTachyon(t *testing.T) {
-	override := t.TempDir()
-	t.Setenv(state.DirEnv, override)
-
-	got, err := state.Root()
-	if err != nil {
-		t.Fatalf("Root: %v", err)
-	}
-	want := filepath.Join(override, "Tachyon")
-	if got != want {
-		t.Fatalf("Root() = %q; want %q", got, want)
+	for name, fn := range map[string]func() (string, error){
+		"ConfigDir": state.ConfigDir,
+		"StateDir":  state.StateDir,
+	} {
+		got, err := fn()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.HasPrefix(got, override+string(filepath.Separator)) {
+			t.Fatalf("%s() with %s=%q = %q; want it under the override", name, state.DirEnv, override, got)
+		}
 	}
 }
 
-// TestBootRootIsRootPlusBoot pins the shape BootRoot builds on top of Root.
-func TestBootRootIsRootPlusBoot(t *testing.T) {
+// TestBootRootIsStateDirPlusBoot pins the shape BootRoot builds on StateDir.
+func TestBootRootIsStateDirPlusBoot(t *testing.T) {
 	override := t.TempDir()
 	t.Setenv(state.DirEnv, override)
 
-	root, err := state.Root()
+	root, err := state.StateDir()
 	if err != nil {
-		t.Fatalf("Root: %v", err)
+		t.Fatalf("StateDir: %v", err)
 	}
 	got, err := state.BootRoot()
 	if err != nil {
@@ -77,6 +104,35 @@ func TestBootRootIsRootPlusBoot(t *testing.T) {
 	want := filepath.Join(root, "boot")
 	if got != want {
 		t.Fatalf("BootRoot() = %q; want %q", got, want)
+	}
+}
+
+// TestLaunchDirIsConfigDirPlusLaunch pins the launch-profile store's shape,
+// and that it is under CONFIG rather than state: a launch profile is a
+// durable choice a person wrote, not something Tachyon regenerates.
+func TestLaunchDirIsConfigDirPlusLaunch(t *testing.T) {
+	override := t.TempDir()
+	t.Setenv(state.DirEnv, override)
+
+	config, err := state.ConfigDir()
+	if err != nil {
+		t.Fatalf("ConfigDir: %v", err)
+	}
+	got, err := state.LaunchDir()
+	if err != nil {
+		t.Fatalf("LaunchDir: %v", err)
+	}
+	want := filepath.Join(config, "launch")
+	if got != want {
+		t.Fatalf("LaunchDir() = %q; want %q", got, want)
+	}
+
+	stateDir, err := state.StateDir()
+	if err != nil {
+		t.Fatalf("StateDir: %v", err)
+	}
+	if strings.HasPrefix(got, stateDir) {
+		t.Fatalf("LaunchDir() = %q; falls under the state root %q, but launch profiles are config", got, stateDir)
 	}
 }
 
@@ -93,7 +149,7 @@ func TestBootRootNeverUnderDevAgentOS(t *testing.T) {
 	}
 	root, err := state.BootRoot()
 	if err != nil {
-		t.Skipf("no user config dir on this machine: %v", err)
+		t.Skipf("cannot resolve app paths on this machine: %v", err)
 	}
 	devAgentOS := filepath.Join(home, "dev", "agent-os")
 	if strings.HasPrefix(root, devAgentOS) {
@@ -101,12 +157,11 @@ func TestBootRootNeverUnderDevAgentOS(t *testing.T) {
 	}
 }
 
-// TestStateRootMovesEveryConsumerTogether is the property the task exists
-// to prove: changing where Tachyon's state root points is a one-line change
-// in one function ([state.Dir], via its override), and every consumer — the
-// boot root this package computes directly, the shell's preferences path,
-// and the bundle-root store's path — follows it, together, from that one
-// change.
+// TestStateRootMovesEveryConsumerTogether is the property this package
+// exists to prove: changing where Tachyon's files live is a one-variable
+// change, and every consumer — the boot root, the launch-profile store, the
+// shell's preferences path, and the bundle-root store's path — follows it,
+// together, from that one change.
 //
 // This is a cross-package test on purpose: internal/shell and
 // internal/bundle both import internal/state (never the reverse), so this
@@ -117,7 +172,7 @@ func TestStateRootMovesEveryConsumerTogether(t *testing.T) {
 	overrideA := filepath.Join(t.TempDir(), "state-a")
 	overrideB := filepath.Join(t.TempDir(), "state-b")
 
-	check := func(t *testing.T, override string) (bootRoot, prefsPath, bundlePath string) {
+	check := func(t *testing.T, override string) map[string]string {
 		t.Helper()
 		t.Setenv(state.DirEnv, override)
 
@@ -125,7 +180,11 @@ func TestStateRootMovesEveryConsumerTogether(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BootRoot: %v", err)
 		}
-		prefsPath, err = shell.DefaultPrefsPath()
+		launchDir, err := state.LaunchDir()
+		if err != nil {
+			t.Fatalf("LaunchDir: %v", err)
+		}
+		prefsPath, err := shell.DefaultPrefsPath()
 		if err != nil {
 			t.Fatalf("shell.DefaultPrefsPath: %v", err)
 		}
@@ -133,33 +192,31 @@ func TestStateRootMovesEveryConsumerTogether(t *testing.T) {
 		if err != nil {
 			t.Fatalf("bundle.DefaultRootStore: %v", err)
 		}
-		bundlePath = store.Path
 
-		// Every one of the three must actually be rooted under this
-		// override -- not just distinct from the other override's values,
-		// but genuinely nested under the directory the override just set.
-		for name, p := range map[string]string{
+		paths := map[string]string{
 			"boot root":         bootRoot,
+			"launch dir":        launchDir,
 			"shell prefs path":  prefsPath,
-			"bundle store path": bundlePath,
-		} {
+			"bundle store path": store.Path,
+		}
+
+		// Every one must actually be rooted under this override -- not just
+		// distinct from the other override's values, but genuinely nested
+		// under the directory the override just set.
+		for name, p := range paths {
 			if !strings.HasPrefix(p, override) {
 				t.Fatalf("%s = %q; want it under override %q", name, p, override)
 			}
 		}
-		return bootRoot, prefsPath, bundlePath
+		return paths
 	}
 
-	bootA, prefsA, bundleA := check(t, overrideA)
-	bootB, prefsB, bundleB := check(t, overrideB)
+	a := check(t, overrideA)
+	b := check(t, overrideB)
 
-	if bootA == bootB {
-		t.Errorf("boot root did not move: %q under both overrides", bootA)
-	}
-	if prefsA == prefsB {
-		t.Errorf("shell prefs path did not move: %q under both overrides", prefsA)
-	}
-	if bundleA == bundleB {
-		t.Errorf("bundle store path did not move: %q under both overrides", bundleA)
+	for name, pathA := range a {
+		if pathA == b[name] {
+			t.Errorf("%s did not move: %q under both overrides", name, pathA)
+		}
 	}
 }

@@ -585,3 +585,84 @@ func mustDecode(t *testing.T, fixture string) boot.Result {
 	}
 	return result
 }
+
+// TestHarnessArgv_PrefersTheReportedSettingsPath is the other half of
+// TestHarnessArgv_AlwaysIncludesSettingsFlag, and the two must be read
+// together: that one pins that the flag ALWAYS appears, this one pins WHICH
+// path it names.
+//
+// cairn moved every harness's paths out of Go and into
+// bootdir/layouts/<provider>.yaml, so a path is data. The join below is a
+// second copy of one of those documents; settings_path is the document. If
+// the Claude layout ever moves that file, the reported path follows it and
+// the join does not — and the permanent guard alone would not catch it,
+// because it asserts presence rather than correctness.
+func TestHarnessArgv_PrefersTheReportedSettingsPath(t *testing.T) {
+	const reported = "/state/boot/engineer/abc123/somewhere/else/settings.json"
+	argv, err := boot.HarnessArgv(boot.Result{
+		BootDir:      "/state/boot/engineer/abc123",
+		Provider:     boot.ProviderClaude,
+		SettingsPath: strPtr(reported),
+	})
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	for i, a := range argv {
+		if a == "--settings" {
+			if argv[i+1] != reported {
+				t.Fatalf("--settings = %q; want cairn's own reported path %q", argv[i+1], reported)
+			}
+			return
+		}
+	}
+	t.Fatalf("HarnessArgv = %v; no --settings", argv)
+}
+
+// TestHarnessArgv_FallsBackToTheJoinWhenNothingWasRendered covers the case
+// cairn's contract explicitly allows: a profile with no spec.settings and
+// nothing to grant renders no file, and settings_path is null. The flag must
+// still appear, naming the path the file would have been at — gating it on
+// SettingsPath is the silent downgrade the permanent guard exists to
+// prevent.
+func TestHarnessArgv_FallsBackToTheJoinWhenNothingWasRendered(t *testing.T) {
+	argv, err := boot.HarnessArgv(boot.Result{
+		BootDir:      "/state/boot/engineer/abc123",
+		Provider:     boot.ProviderClaude,
+		SettingsPath: nil,
+	})
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	want := filepath.Join("/state/boot/engineer/abc123", ".claude", "settings.json")
+	for i, a := range argv {
+		if a == "--settings" {
+			if argv[i+1] != want {
+				t.Fatalf("--settings = %q; want the fallback join %q", argv[i+1], want)
+			}
+			return
+		}
+	}
+	t.Fatalf("HarnessArgv = %v; no --settings for a nil SettingsPath", argv)
+}
+
+// TestHarnessArgv_IgnoresAnEmptyReportedPath: cairn's contract says an
+// absent value is null and never "", but an empty string reaching argv would
+// be `claude --settings ""` — a launch that is wrong in a way nothing
+// reports, which is exactly the shape bootjson.go's own contract prose
+// argues against. Belt and braces, one line.
+func TestHarnessArgv_IgnoresAnEmptyReportedPath(t *testing.T) {
+	empty := ""
+	argv, err := boot.HarnessArgv(boot.Result{
+		BootDir:      "/state/boot/engineer/abc123",
+		Provider:     boot.ProviderClaude,
+		SettingsPath: &empty,
+	})
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	for i, a := range argv {
+		if a == "--settings" && argv[i+1] == "" {
+			t.Fatal("--settings was given an empty path")
+		}
+	}
+}

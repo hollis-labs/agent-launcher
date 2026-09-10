@@ -79,8 +79,12 @@ func TestTreeNodesAreNeverNullOnTheWire(t *testing.T) {
 			emptyKinds++
 		}
 	}
-	if emptyKinds < 5 {
-		t.Fatalf("fixture is supposed to leave 5 of 6 kinds empty; got only %d — the fixture itself is not exercising the bug", emptyKinds)
+	// The fixture holds one profile and nothing else, so every other kind
+	// must come back as an empty group. Checked as "all but one" rather
+	// than a literal count so retiring a kind cannot quietly stop the
+	// fixture from exercising the bug.
+	if want := len(tr.Groups) - 1; emptyKinds < want {
+		t.Fatalf("fixture is supposed to leave %d of %d kinds empty; got only %d — the fixture itself is not exercising the bug", want, len(tr.Groups), emptyKinds)
 	}
 
 	// And round-tripping the wire bytes back into a fresh Go value must

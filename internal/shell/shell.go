@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -14,11 +15,11 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
-	"github.com/hollis-labs/tachyon/internal/binding"
-	"github.com/hollis-labs/tachyon/internal/bindingcomposer"
 	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/launch"
+	"github.com/hollis-labs/tachyon/internal/launchcomposer"
+	"github.com/hollis-labs/tachyon/internal/launchprofile"
 	"github.com/hollis-labs/tachyon/internal/manager"
 	"github.com/hollis-labs/tachyon/internal/preview"
 	"github.com/hollis-labs/tachyon/internal/project"
@@ -59,12 +60,13 @@ type Config struct {
 	// BundleRootStorePath overrides where the manager's active-bundle-root
 	// setting is persisted (see [bundle.RootStore]). Empty means
 	// [bundle.DefaultRootStore]. Tests set it so a test run never touches
-	// ~/Library/Application Support or, through the default it stores,
-	// implies anything about ~/dev/projects/agent-setup.
+	// the real config directory or, through the default it stores, implies
+	// anything about ~/dev/projects/agent-setup.
 	BundleRootStorePath string
 
 	// ProjectStorePath overrides projects.json. Tests can keep all Tachyon
-	// state in scratch space; the app leaves this empty to use state.Root().
+	// state in scratch space; the app leaves this empty to use
+	// project.DefaultStore, which reads state.ConfigDir.
 	ProjectStorePath string
 
 	// Logger receives shell diagnostics. Nil means slog.Default.
@@ -105,6 +107,17 @@ func New(cfg Config) (*Shell, error) {
 		log = slog.Default()
 	}
 
+	// Before anything resolves a path, move any pre-XDG files into the
+	// config root. This must run ahead of every store below, because each
+	// one treats an absent file as "first run, use defaults" -- a correct
+	// rule that would silently discard a rebound hotkey, the project list
+	// and the active bundle root if it saw the new location before the old
+	// files arrived there. Adopt is idempotent, so it costs one stat on
+	// every subsequent launch. See internal/state's Adopt.
+	if err := state.Adopt(os.Stderr); err != nil {
+		log.Warn("adopting legacy state files", "err", err)
+	}
+
 	path := cfg.PrefsPath
 	if path == "" {
 		p, err := DefaultPrefsPath()
@@ -123,13 +136,14 @@ func New(cfg Config) (*Shell, error) {
 		return nil, err
 	}
 	mgr := manager.New(rootStore)
-	// The same rootStore the manager reads, so the palette's bindings list
-	// and the manager's tree always agree on which bundle is active.
-	bindings := binding.NewService(rootStore)
-	// Same rootStore again: a launch resolves the binding the palette just
-	// showed, from the same bundle everything else above is reading.
+	// The same rootStore the manager reads, so the palette's agent-profile
+	// list and the manager's tree always agree on which bundle is active.
 	launcher := launch.NewService(rootStore)
-	composer := bindingcomposer.NewService(rootStore, launcher)
+	// The launch store is NOT rooted in the bundle, which is the seam this
+	// design turns on: changing the active bundle changes what agents are
+	// available, never how they run.
+	launchProfiles := launchprofile.NewService()
+	composer := launchcomposer.NewService(launcher)
 	compositionPreview := preview.NewService(rootStore, preview.Options{})
 	var projectStore project.Store
 	if cfg.ProjectStorePath != "" {
@@ -140,7 +154,17 @@ func New(cfg Config) (*Shell, error) {
 			return nil, err
 		}
 	}
-	projects := project.NewService(projectStore, rootStore)
+	projects := project.NewService(projectStore)
+
+	// A palette with no launch profile can launch nothing: no profile in
+	// agent-setup declares a provider, so cairn refuses every render. Seed
+	// the store when it is empty so a first run has one — never otherwise,
+	// so a deleted profile stays deleted. See launchprofile.EnsureSeeds.
+	if dir, dirErr := state.LaunchDir(); dirErr != nil {
+		log.Warn("resolving the launch profile directory", "err", dirErr)
+	} else if seedErr := launchprofile.EnsureSeeds(launchprofile.Open(dir), os.Stderr); seedErr != nil {
+		log.Warn("seeding launch profiles", "err", seedErr)
+	}
 
 	s := &Shell{
 		log:           log,
@@ -167,7 +191,7 @@ func New(cfg Config) (*Shell, error) {
 		Services: []application.Service{
 			application.NewService(&Service{shell: s}),
 			application.NewService(mgr),
-			application.NewService(bindings),
+			application.NewService(launchProfiles),
 			application.NewService(launcher),
 			application.NewService(composer),
 			application.NewService(compositionPreview),

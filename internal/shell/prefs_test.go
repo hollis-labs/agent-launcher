@@ -8,29 +8,34 @@ import (
 	"github.com/hollis-labs/tachyon/internal/state"
 )
 
-// TestDefaultPrefsPathUnchanged proves internal/state's convergence did not
-// relocate the hotkey preference: DefaultPrefsPath must still resolve to
-// exactly the path this package hardcoded before internal/state existed --
-// <os.UserConfigDir()>/Tachyon/shell.json -- computed here the old way, by
-// hand, and compared against what DefaultPrefsPath returns today. A silent
-// relocation of the hotkey preference is a real regression (an existing
-// user's rebound accelerator would stop being found), which is exactly what
-// this guards.
-func TestDefaultPrefsPathUnchanged(t *testing.T) {
+// TestDefaultPrefsPathIsUnderConfigDir pins where the hotkey preference
+// lives: state.ConfigDir()/shell.json, which on a default machine is
+// ~/.config/tachyon/shell.json.
+//
+// This test used to pin the OPPOSITE path -- <os.UserConfigDir()>/Tachyon/
+// shell.json, computed by hand -- because a silent relocation of the hotkey
+// preference is a real regression: an existing user's rebound accelerator
+// would stop being found. The relocation happened deliberately when the
+// roots moved to XDG, and the concern that test encoded did not go away with
+// it; it moved to state.Adopt, which carries the old file to the new
+// location on startup. That is what makes changing this assertion safe, so
+// the two are named in each other's comments:
+// TestAdoptMovesLegacyFilesOnce is the other half.
+func TestDefaultPrefsPathIsUnderConfigDir(t *testing.T) {
 	t.Setenv(state.DirEnv, "")
 
-	dir, err := os.UserConfigDir()
+	dir, err := state.ConfigDir()
 	if err != nil {
-		t.Skipf("no user config dir on this machine: %v", err)
+		t.Skipf("cannot resolve the config dir on this machine: %v", err)
 	}
-	want := filepath.Join(dir, "Tachyon", "shell.json")
+	want := filepath.Join(dir, "shell.json")
 
 	got, err := DefaultPrefsPath()
 	if err != nil {
 		t.Fatalf("DefaultPrefsPath: %v", err)
 	}
 	if got != want {
-		t.Fatalf("DefaultPrefsPath() = %q; want the pre-internal/state path %q", got, want)
+		t.Fatalf("DefaultPrefsPath() = %q; want %q", got, want)
 	}
 }
 

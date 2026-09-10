@@ -5,7 +5,7 @@ import { base64ToText, textToBase64 } from "./bytes.js";
 // state; see NewArtifact.jsx's header comment for why it is not folded in
 // here.
 import NewArtifact from "./NewArtifact.jsx";
-import BindingComposer from "./BindingComposer.jsx";
+import LaunchProfileComposer from "./LaunchProfileComposer.jsx";
 
 // The bundle tree and the text editor: CW-20260903-0009. Every artifact is a
 // text buffer — bytes in, bytes out. This window never parses, reformats or
@@ -177,20 +177,22 @@ function BundleRootBar({ onRootChanged, dirtyRef }) {
   );
 }
 
-// KIND_META labels and color-codes each of the six artifact kinds. It exists
-// so a row or an open tab can say what it is at a glance — necessary because
-// every one of the eight role-prose files shares a basename with a profile
-// (profiles/architect.md vs. templates/roles/architect.md), and being in a
+// KIND_META labels and color-codes each artifact kind. It exists so a row or
+// an open tab can say what it is at a glance — necessary because a template
+// shares a basename with a profile as readily as role prose did
+// (profiles/architect.md vs. templates/lenses/architect.md), and being in a
 // different tree group is not sufficient on its own: see task
 // CW-20260903-0009's "conflation trap".
+// role-prose and binding retired with their directories on 2026-09-10 —
+// templates/roles/ and bindings/ both left agent-setup. kindMeta falls back
+// to the raw kind for anything unlisted, so a tree that still carried one
+// would render rather than crash.
 const KIND_META = {
   profile: { label: "Profile", plural: "Profiles", color: "#45c7b8" },
-  "role-prose": { label: "Role prose", plural: "Role prose", color: "#c78ee0" },
   template: { label: "Template", plural: "Templates", color: "#e0b04b" },
   prompt: { label: "Prompt", plural: "Prompts", color: "#e0708a" },
   skill: { label: "Skill", plural: "Skills", color: "#7fb0e0" },
   hook: { label: "Hook", plural: "Hooks", color: "#e08a6c" },
-  binding: { label: "Binding", plural: "Bindings", color: "#8fce7a" },
 };
 
 function kindMeta(kind) {
@@ -373,7 +375,7 @@ function Bundle({ dirtyRef: sharedDirtyRef } = {}) {
   };
 
   const openComposer = () => {
-    if (dirtyRef.current && !window.confirm("Discard unsaved artifact changes and open the binding composer?")) return;
+    if (dirtyRef.current && !window.confirm("Discard unsaved artifact changes and open the launch profile composer?")) return;
     currentRequestRef.current = null;
     setSelectedRef(null);
     setSelectedNode(null);
@@ -472,8 +474,8 @@ function Bundle({ dirtyRef: sharedDirtyRef } = {}) {
           <button className={`project-nav-row${composerOpen ? " active" : ""}`} onClick={openComposer}>
             <span className="project-nav-icon">＋</span>
             <span>
-              <strong>Compose binding</strong>
-              <small>Profile → parts → additions → scope</small>
+              <strong>New launch profile</strong>
+              <small>How an agent runs · Tachyon's own, not the bundle</small>
             </span>
           </button>
           <button className={`project-nav-row${projectsOpen ? " active" : ""}`} onClick={openProjects}>
@@ -488,8 +490,8 @@ function Bundle({ dirtyRef: sharedDirtyRef } = {}) {
             never a bundle" from "this bundle is genuinely empty" — two
             situations that used to render identically (an empty tree, six
             groups all saying "none"), which is exactly the failure mode
-            CW-20260904-0002 already fixed once for the palette's bindings
-            list and this task's own record says not to reintroduce here.
+            CW-20260904-0002 already fixed once for the palette's own list
+            and this task's own record says not to reintroduce here.
             "unrecognized" replaces the tree entirely with a clear reason,
             the same way Palette.jsx's "missing"/"unreadable" states
             replace its list rather than sitting on top of it. */}
@@ -498,7 +500,7 @@ function Bundle({ dirtyRef: sharedDirtyRef } = {}) {
             <div className="err">This doesn't look like a Cairn bundle</div>
             <div className="muted" style={{ marginTop: 8 }}>
               None of <code>profiles/</code>, <code>templates/</code>, <code>prompts/</code>,{" "}
-              <code>skills/</code>, <code>hooks/</code> or <code>bindings/</code> exist under{" "}
+              <code>skills/</code> or <code>hooks/</code> exist under{" "}
               <code>{tree.root}</code>.
               Pick a different folder above, or reset to the default bundle.
             </div>
@@ -519,7 +521,7 @@ function Bundle({ dirtyRef: sharedDirtyRef } = {}) {
       </aside>
       <section className="editor-pane">
         {composerOpen ? (
-          <BindingComposer tree={tree} projects={composerProjects} projectError={composerProjectError} onSaved={loadTree} />
+          <LaunchProfileComposer tree={tree} projects={composerProjects} projectError={composerProjectError} onSaved={loadTree} />
         ) : projectsOpen ? (
           <Projects />
         ) : !selectedNode ? (
@@ -625,14 +627,14 @@ function Projects() {
   };
 
   const remove = async () => {
-    if (!selected || !window.confirm(`Delete project ${selected.project.name}? Bindings are not changed.`)) return;
+    if (!selected || !window.confirm(`Delete project ${selected.project.name}? Nothing else is changed.`)) return;
     setBusy(true);
     try {
       await ProjectAPI.Delete(selected.project.name);
       setSelectedName(null);
       setDraft(emptyDraft);
       await load();
-      setStatus({ kind: "ok", text: `Deleted ${selected.project.name}. Bindings were left untouched.` });
+      setStatus({ kind: "ok", text: `Deleted ${selected.project.name}.` });
     } catch (e) {
       setStatus({ kind: "err", text: String(e?.message ?? e) });
     } finally {
@@ -643,7 +645,7 @@ function Projects() {
   return (
     <div className="projects-pane">
       <div className="projects-header">
-        <div><h2>Projects</h2><p className="muted">Saved by Tachyon. A project's path is copied literally into a binding.</p></div>
+        <div><h2>Projects</h2><p className="muted">Saved by Tachyon. A project's path is copied literally into a launch as --scope.</p></div>
         <button onClick={beginCreate}>+ New project</button>
       </div>
       <div className="projects-body">
@@ -661,7 +663,12 @@ function Projects() {
               <label>Name<input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
               <label>Path<div className="project-path-row"><input value={draft.path} spellCheck={false} placeholder="Paste a path or choose a folder" onChange={(e) => setDraft({ ...draft, path: e.target.value })} /><button onClick={pickPath}>Choose…</button></div></label>
               <div className="project-actions"><button onClick={save} disabled={busy || !draft.name.trim() || !draft.path.trim()}>{busy ? "Saving…" : "Save"}</button>{selected && <button className="danger" onClick={remove} disabled={busy}>Delete</button>}</div>
-              {selected && <div className="project-bindings"><h3>Bindings at this exact path</h3>{selected.bindings.length === 0 ? <p className="muted">None. Bindings on an old path remain self-contained and are not changed here.</p> : <ul>{selected.bindings.map((b) => <li key={b.name}><strong>{b.name}</strong><span>{b.profile}</span><code>{b.scope}</code></li>)}</ul>}</div>}
+              {/* There is no "what launches here" list any more. A launch
+                  profile deliberately carries no scope — cairn refuses
+                  `scope:` as frontmatter — so there is nothing in the launch
+                  store to match a project against. The two are orthogonal by
+                  design: the launch profile says how, the project says
+                  where. See internal/project's View. */}
             </>
           ) : <p className="note">Select a project or create one. Project records live under Tachyon's state root, independently of the active bundle.</p>}
           {status && <p className={status.kind}>{status.text}</p>}
@@ -672,9 +679,9 @@ function Projects() {
 }
 
 function TreeGroup({ group, selectedRef, onOpen }) {
-  // Same defense-in-depth as tree.groups above: bindings/ does not exist in
-  // the live bundle today, so this is the group that is empty in practice,
-  // right now, not a hypothetical.
+  // Same defense-in-depth as tree.groups above: an artifact directory that
+  // does not exist enumerates as empty rather than as an error, so an empty
+  // group is a real, ordinary state and not a hypothetical.
   const nodes = group.nodes ?? [];
   return (
     <div className="tree-group">

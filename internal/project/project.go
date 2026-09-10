@@ -1,5 +1,5 @@
 // Package project owns Tachyon's saved project records. Projects are UI
-// conveniences: their paths are copied into bindings as literals, and neither
+// conveniences: a project's path becomes a launch's --scope, and neither
 // Cairn nor the bundle ever sees a project name.
 package project
 
@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hollis-labs/tachyon/internal/binding"
-	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
 
@@ -116,9 +114,9 @@ func (d document) MarshalJSON() ([]byte, error) {
 type Store struct{ Path string }
 
 func DefaultStore() (Store, error) {
-	root, err := state.Root()
+	root, err := state.ConfigDir()
 	if err != nil {
-		return Store{}, fmt.Errorf("project: locating state root: %w", err)
+		return Store{}, fmt.Errorf("project: locating config dir: %w", err)
 	}
 	return Store{Path: filepath.Join(root, fileName)}, nil
 }
@@ -235,47 +233,41 @@ func (s Store) save(doc document) error {
 	return nil
 }
 
+// View is one project as the frontend reads it.
+//
+// It used to carry the bindings whose scope matched the project's path, so
+// the manager could show "what launches here." Bindings are gone, and
+// nothing replaced that association: a launch profile deliberately carries
+// no scope (cairn refuses `scope:` as frontmatter), so there is nothing in
+// the launch store to match a project against. The two are orthogonal by
+// design — the launch profile says how, the project says where — and a
+// join between them would be inventing a relationship neither side
+// declares.
+//
+// The wrapper is kept rather than returning []Project directly because the
+// frontend already reads views[].project, and because a project is where a
+// per-project fact (a default launch profile, say) would land if one is
+// ever wanted.
 type View struct {
-	Project  Project           `json:"project"`
-	Bindings []binding.Binding `json:"bindings"`
+	Project Project `json:"project"`
 }
 
 type Service struct {
 	projects Store
-	bundles  bundle.RootStore
 }
 
-func NewService(projects Store, bundles bundle.RootStore) *Service {
-	return &Service{projects: projects, bundles: bundles}
+func NewService(projects Store) *Service {
+	return &Service{projects: projects}
 }
 
-// List associates bindings by literal scope equality only. It performs no
-// path cleaning, expansion, symlink resolution, or closest-wins lookup.
 func (s *Service) List() ([]View, error) {
 	projects, err := s.projects.List()
 	if err != nil {
 		return nil, err
 	}
-	root, err := s.bundles.Resolve()
-	if err != nil {
-		return nil, err
-	}
-	bindings, err := binding.Open(root).List()
-	if errors.Is(err, binding.ErrBindingsDirMissing) {
-		bindings, err = []binding.Binding{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	views := make([]View, 0, len(projects))
 	for _, p := range projects {
-		v := View{Project: p, Bindings: []binding.Binding{}}
-		for _, b := range bindings {
-			if b.Scope == p.Path {
-				v.Bindings = append(v.Bindings, b)
-			}
-		}
-		views = append(views, v)
+		views = append(views, View{Project: p})
 	}
 	return views, nil
 }

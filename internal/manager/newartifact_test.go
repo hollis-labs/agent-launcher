@@ -48,15 +48,9 @@ func TestNewArtifactCreatesEachSupportedKindAndAppearsInTree(t *testing.T) {
 		wantID string // what content.ID (and the Tree() node's ID) should be
 	}{
 		{bundle.KindProfile, "brandnew", "brandnew"},
-		{bundle.KindRoleProse, "brandnew", "brandnew"},
 		{bundle.KindTemplate, "brandnew", "brandnew"},
 		{bundle.KindPrompt, "brandnew", "brandnew"},
 		{bundle.KindSkill, "brandnew", "brandnew"},
-		// Unlike every other kind, a binding's ID carries its file
-		// extension (bundle.BindingID's own documented convention,
-		// unchanged by CW-20260904-0002 / T23 — see internal/skeleton's
-		// bindingRefID).
-		{bundle.KindBinding, "brandnew", "brandnew.yaml"},
 	}
 	for _, tc := range cases {
 		content, err := svc.NewArtifact(string(tc.kind), tc.id, "Brand New", "A fresh description.")

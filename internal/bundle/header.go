@@ -30,6 +30,11 @@ type Header struct {
 	Name        string
 	Description string
 	Extends     string
+	// Abstract is the frontmatter's `abstract: true`. Cairn refuses to boot
+	// such a profile ("extended rather than booted"), so a launcher must be
+	// able to keep it out of a list of things to launch — offering base as a
+	// target produces a refusal a person cannot act on.
+	Abstract bool
 }
 
 // headerKeys are the only keys ScanHeader looks for. Everything else in the
@@ -40,6 +45,12 @@ var headerKeys = map[string]func(*Header, string){
 	"name":        func(h *Header, v string) { h.Name = v },
 	"description": func(h *Header, v string) { h.Description = v },
 	"extends":     func(h *Header, v string) { h.Extends = v },
+	// Anything but a recognized true is false, including an absent key.
+	// This package models no YAML truthiness of its own beyond the two
+	// spellings a catalog actually uses; a value it does not recognize
+	// leaves the profile bootable, which is the safe direction — cairn
+	// refuses it at the boot with its own diagnostic either way.
+	"abstract": func(h *Header, v string) { h.Abstract = v == "true" || v == "yes" },
 }
 
 // ScanHeader extracts [Header] from a file's bytes.
@@ -105,6 +116,8 @@ func alreadySet(h *Header, key string) bool {
 		return h.Description != ""
 	case "extends":
 		return h.Extends != ""
+	case "abstract":
+		return h.Abstract
 	}
 	return false
 }

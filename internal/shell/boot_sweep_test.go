@@ -60,7 +60,11 @@ func TestShell_SweepBootDirectories_RealBootRootRealLsof(t *testing.T) {
 		t.Fatalf("state.BootRoot() = %q; want an absolute path under the scratch dir %q", root, scratch)
 	}
 
-	free := filepath.Join(root, "eng-nanite", boot.PrevPrefix+"20260904T000000.000000000Z")
+	// The real layout: <boot-root>/<project>/<profile>/.prev-*. A fixture
+	// one level shallower would be invisible to the sweep, and this test
+	// would pass by finding nothing to do — see internal/boot's
+	// TestSweepFindsWhatPrepareMovedAside for the same trap one layer down.
+	free := filepath.Join(root, boot.ProjectKey("/work/nanite"), "engineer", boot.PrevPrefix+"20260904T000000.000000000Z")
 	if err := os.MkdirAll(free, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", free, err)
 	}
@@ -103,7 +107,7 @@ func TestService_SweepBootDirectories_DelegatesToRealSweep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.BootRoot: %v", err)
 	}
-	free := filepath.Join(root, "planner", boot.PrevPrefix+"20260904T010000.000000000Z")
+	free := filepath.Join(root, boot.ProjectKey("/work/tachyon"), "planner", boot.PrevPrefix+"20260904T010000.000000000Z")
 	if err := os.MkdirAll(free, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", free, err)
 	}

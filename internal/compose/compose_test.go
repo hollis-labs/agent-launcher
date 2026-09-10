@@ -53,7 +53,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "planner",
 				"--profile", "/Users/chrispian/dev/projects/agent-setup",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--json",
 			},
 		},
@@ -68,7 +67,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "my-saved-binding",
 				"--profile", "/Users/chrispian/dev/projects/agent-setup",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--json",
 			},
 		},
@@ -84,7 +82,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "architect",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--skill", "go-testing,code-review,sql",
 				"--json",
 			},
@@ -101,7 +98,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "architect",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--skill", "go-testing",
 				"--json",
 			},
@@ -118,7 +114,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "architect",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--prompt", "report,onboarding",
 				"--json",
 			},
@@ -135,7 +130,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "architect",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--prompt", "report",
 				"--json",
 			},
@@ -153,7 +147,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "architect",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--skill", "go-testing",
 				"--prompt", "report",
 				"--json",
@@ -171,7 +164,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "engineer",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--with", "extra-context",
 				"--with", "extra-tools",
 				"--json",
@@ -192,7 +184,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "writer",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--set", "tone=terse",
 				"--set", "audience=internal",
 				"--json",
@@ -210,7 +201,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "reviewer",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--scope", "/Users/chrispian/dev/projects/tachyon",
 				"--json",
 			},
@@ -226,7 +216,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "reviewer",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--json",
 			},
 		},
@@ -248,7 +237,6 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "conductor",
 				"--profile", "/bundle/root",
 				"--boot-root", bootRoot,
-				"--session", "current",
 				"--with", "extra-part",
 				"--skill", "skill-one,skill-two",
 				"--prompt", "report,onboarding",
@@ -258,34 +246,34 @@ func buildCases(bootRoot string) []buildCase {
 			},
 		},
 		{
-			// CW-20260906-0001. --provider is the one flag whose value is a
-			// materialization target rather than content, and it renders
-			// exactly like every other optional field: present when set,
-			// absent when not.
-			name: "provider selected explicitly",
+			// The provider arrives as a launch profile in Parts, by path,
+			// from outside the bundle. It renders as an ordinary --with,
+			// which is the whole point: cairn resolves it through the same
+			// cascade as any other profile and never learns it came from a
+			// launcher.
+			name: "launch profile supplies the provider, by path",
 			comp: compose.Composition{
-				Target:   "codex-coord-agent-setup",
+				Target:   "engineer",
 				Bundle:   "/Users/chrispian/dev/projects/agent-setup",
-				Provider: "codex",
 				BootRoot: bootRoot,
+				Parts:    []string{"/Users/chrispian/.config/tachyon/launch/codex.md"},
 			},
 			want: []string{
-				"boot", "codex-coord-agent-setup",
+				"boot", "engineer",
 				"--profile", "/Users/chrispian/dev/projects/agent-setup",
 				"--boot-root", bootRoot,
-				"--session", "current",
-				"--provider", "codex",
+				"--with", "/Users/chrispian/.config/tachyon/launch/codex.md",
 				"--json",
 			},
 		},
 		{
-			name: "provider alongside everything else a compose form can add",
+			name: "a launch profile alongside everything else a compose form can add",
 			comp: compose.Composition{
 				Target:   "orchestrator",
 				Bundle:   "/Users/chrispian/dev/projects/agent-setup",
-				Provider: "codex",
 				BootRoot: bootRoot,
-				Parts:    []string{"codex-cli"},
+				Session:  "codex-agent-setup-abc123",
+				Parts:    []string{"/Users/chrispian/.config/tachyon/launch/codex.md", "nanite-domain"},
 				Skills:   []string{"surface-discovery"},
 				Scope:    "/Users/chrispian/dev/projects/agent-setup",
 			},
@@ -293,9 +281,9 @@ func buildCases(bootRoot string) []buildCase {
 				"boot", "orchestrator",
 				"--profile", "/Users/chrispian/dev/projects/agent-setup",
 				"--boot-root", bootRoot,
-				"--session", "current",
-				"--provider", "codex",
-				"--with", "codex-cli",
+				"--session", "codex-agent-setup-abc123",
+				"--with", "/Users/chrispian/.config/tachyon/launch/codex.md",
+				"--with", "nanite-domain",
 				"--skill", "surface-discovery",
 				"--scope", "/Users/chrispian/dev/projects/agent-setup",
 				"--json",
@@ -304,18 +292,20 @@ func buildCases(bootRoot string) []buildCase {
 	}
 }
 
-// TestProviderOmittedEntirelyWhenUnset is the property the ordinary launch
-// depends on: an empty Provider is not "the default provider spelled out,"
-// it is no flag at all, so Cairn renders whatever the resolved profile
-// cascade declares — exactly what `cairn boot <target>` does on its own.
-// The palette leaves the control empty for every launch that does not
-// deliberately retarget, so this is the common path and not an edge case.
-func TestProviderOmittedEntirelyWhenUnset(t *testing.T) {
+// TestProviderFlagIsNeverEmitted pins the removal of --provider, which is a
+// contract change rather than a tidy-up.
+//
+// The flag used to default to whatever the resolved profile declared. No
+// profile in agent-setup declares a provider since 2026-09-10, so that
+// default now resolves to nothing and cairn refuses the render. The provider
+// arrives in a launch profile instead — an ordinary part in Parts — so it is
+// still composed and still never inferred, one layer further out.
+//
+// If this flag ever comes back, it is a second source for a value a file
+// already declares, and the two can disagree.
+func TestProviderFlagIsNeverEmitted(t *testing.T) {
 	bootRoot := tachyonBootRoot(t)
 	for _, tc := range buildCases(bootRoot) {
-		if tc.comp.Provider != "" {
-			continue
-		}
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := compose.Build(tc.comp)
 			if err != nil {
@@ -323,58 +313,54 @@ func TestProviderOmittedEntirelyWhenUnset(t *testing.T) {
 			}
 			for _, a := range got {
 				if a == "--provider" {
-					t.Fatalf("Build(%+v) = %v; emitted --provider for an unset Provider", tc.comp, got)
+					t.Fatalf("Build(%+v) = %v; emitted --provider", tc.comp, got)
 				}
 			}
 		})
 	}
 }
 
-// TestProviderIsNeverInferredFromTheTarget pins the decision this flag was
-// added under: a binding named "codex-..." says nothing about a harness.
-// Reading one out of the name would render a Codex layout the first time
-// somebody named a binding after a project rather than a tool, and it would
-// do it silently.
-func TestProviderIsNeverInferredFromTheTarget(t *testing.T) {
-	bootRoot := tachyonBootRoot(t)
-	for _, target := range []string{"codex-coord-agent-setup", "claude-something", "codex", "opencode-x"} {
-		got, err := compose.Build(compose.Composition{
-			Target:   target,
-			Bundle:   "/Users/chrispian/dev/projects/agent-setup",
-			BootRoot: bootRoot,
-		})
-		if err != nil {
-			t.Fatalf("Build(%q): %v", target, err)
-		}
-		for _, a := range got {
-			if a == "--provider" {
-				t.Errorf("Build(target %q) = %v; a provider was inferred from the target's name", target, got)
-			}
-		}
-	}
-}
-
-// TestArgumentsCarriesProviderForShowToo: internal/preview builds `cairn
-// show` argv through Arguments, and a preview that resolved a different
-// provider than the launch would show the wrong effective skills. --provider
-// is valid on show, so it belongs in the shared encoder rather than in
-// Build alone.
-func TestArgumentsCarriesProviderForShow(t *testing.T) {
+// TestArgumentsCarriesTheLaunchProfileForShowToo: internal/preview builds
+// `cairn show` argv through Arguments, and a preview resolving a different
+// provider than the launch would show the wrong effective skills. The launch
+// profile is what carries the provider now, so it has to reach show through
+// the shared encoder rather than only Build.
+func TestArgumentsCarriesTheLaunchProfileForShow(t *testing.T) {
+	const launchProfile = "/Users/chrispian/.config/tachyon/launch/codex.md"
 	got, err := compose.Arguments(compose.Composition{
-		Target:   "codex-coord-agent-setup",
-		Bundle:   "/Users/chrispian/dev/projects/agent-setup",
-		Provider: "codex",
+		Target: "engineer",
+		Bundle: "/Users/chrispian/dev/projects/agent-setup",
+		Parts:  []string{launchProfile},
 	})
 	if err != nil {
 		t.Fatalf("Arguments: %v", err)
 	}
 	want := []string{
-		"codex-coord-agent-setup",
+		"engineer",
 		"--profile", "/Users/chrispian/dev/projects/agent-setup",
-		"--provider", "codex",
+		"--with", launchProfile,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Arguments = %#v; want %#v", got, want)
+	}
+}
+
+// TestArgumentsNeverCarriesBootOnlyFlags: show must not receive --boot-root
+// or --session, which are boot's alone. Build adds them around Arguments.
+func TestArgumentsNeverCarriesBootOnlyFlags(t *testing.T) {
+	got, err := compose.Arguments(compose.Composition{
+		Target:   "engineer",
+		Bundle:   "/bundle",
+		BootRoot: "/state/boot",
+		Session:  "some-session",
+	})
+	if err != nil {
+		t.Fatalf("Arguments: %v", err)
+	}
+	for _, a := range got {
+		if a == "--boot-root" || a == "--session" {
+			t.Fatalf("Arguments = %#v; carries %q, which belongs to boot alone", got, a)
+		}
 	}
 }
 
@@ -403,13 +389,13 @@ func TestBuild(t *testing.T) {
 // checks in full — rather than a hand-picked subset, so this guard cannot
 // silently stop covering a shape TestBuild was extended to cover.
 func TestBootRootNeverImplicit(t *testing.T) {
-	tachyonStateDir, err := state.Root()
+	tachyonStateDir, err := state.StateDir()
 	if err != nil {
-		t.Skipf("no user config dir on this machine: %v", err)
+		t.Skipf("no state dir on this machine: %v", err)
 	}
 	bootRoot, err := state.BootRoot()
 	if err != nil {
-		t.Skipf("no user config dir on this machine: %v", err)
+		t.Skipf("no state dir on this machine: %v", err)
 	}
 
 	home, err := os.UserHomeDir()
@@ -514,4 +500,50 @@ func TestBuildNeverEmitsForbiddenFlags(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestSessionIsOmittedWhenEmpty: an empty Session means no flag, which lets
+// Cairn choose its own segment. That is the right default for this package
+// (it decides nothing on a caller's behalf) and the wrong one for Tachyon,
+// which is why internal/launch always supplies one — see the next test.
+func TestSessionIsOmittedWhenEmpty(t *testing.T) {
+	got, err := compose.Build(compose.Composition{
+		Target:   "engineer",
+		Bundle:   "/bundle",
+		BootRoot: "/state/boot",
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, a := range got {
+		if a == "--session" {
+			t.Fatalf("Build = %v; emitted --session for an empty Session", got)
+		}
+	}
+}
+
+// TestSessionRendersVerbatim pins that this package neither derives nor
+// validates the segment. Deriving one here would put the boot directory's
+// identity in two places: internal/boot.SessionKey builds it from a
+// composition's content, and this package only spells it onto a command line.
+func TestSessionRendersVerbatim(t *testing.T) {
+	const session = "codex-users-somebody-dev-projects-cairn-0123abcd"
+	got, err := compose.Build(compose.Composition{
+		Target:   "engineer",
+		Bundle:   "/bundle",
+		BootRoot: "/state/boot",
+		Session:  session,
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for i, a := range got {
+		if a == "--session" {
+			if got[i+1] != session {
+				t.Fatalf("--session = %q; want %q", got[i+1], session)
+			}
+			return
+		}
+	}
+	t.Fatalf("Build = %v; no --session for a set Session", got)
 }

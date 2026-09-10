@@ -7,14 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/project"
 	"github.com/hollis-labs/tachyon/internal/state"
 )
 
-func TestDefaultStoreLivesUnderStateRoot(t *testing.T) {
+func TestDefaultStoreLivesUnderConfigDir(t *testing.T) {
 	t.Setenv(state.DirEnv, t.TempDir())
-	root, _ := state.Root()
+	root, _ := state.ConfigDir()
 	store, err := project.DefaultStore()
 	if err != nil {
 		t.Fatal(err)
@@ -76,25 +75,26 @@ func TestCRUDPersistsAndToleratesUnknownFields(t *testing.T) {
 	}
 }
 
-func TestProjectsIndependentOfBundleRootAndNamesNeverReachBundle(t *testing.T) {
+// TestProjectsNeverReachTheBundle keeps the property the binding-shaped
+// version of this test was really about: a project is Tachyon's own record,
+// and nothing about it is ever written into the bundle.
+//
+// What it no longer checks is the association between a project and the
+// bindings whose scope matched its path — bindings are gone, and a launch
+// profile deliberately carries no scope to match against. See project.View.
+func TestProjectsNeverReachTheBundle(t *testing.T) {
 	stateDir, bundleA, bundleB := t.TempDir(), t.TempDir(), t.TempDir()
 	for _, root := range []string{bundleA, bundleB} {
-		if err := os.Mkdir(filepath.Join(root, "bindings"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, "profiles"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "profiles", "engineer.md"), []byte("---\nid: engineer\n---\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(bundleA, "bindings", "matching.yaml"), []byte("profile: engineer\nscope: /work/a\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bundleA, "bindings", "almost.yaml"), []byte("profile: engineer\nscope: /work/a/\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	rootStore := bundle.RootStore{Path: filepath.Join(stateDir, "bundle.json")}
-	if err := rootStore.Save(bundleA); err != nil {
-		t.Fatal(err)
-	}
+
 	projectStore := project.Store{Path: filepath.Join(stateDir, "projects.json")}
-	svc := project.NewService(projectStore, rootStore)
+	svc := project.NewService(projectStore)
 	const projectName = "NAME-MUST-NEVER-REACH-BUNDLE"
 	if _, err := svc.Create(project.Project{Name: projectName, Path: "/work/a"}); err != nil {
 		t.Fatal(err)
@@ -103,8 +103,8 @@ func TestProjectsIndependentOfBundleRootAndNamesNeverReachBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(views) != 1 || len(views[0].Bindings) != 1 || views[0].Bindings[0].Name != "matching" {
-		t.Fatalf("literal associations = %+v", views)
+	if len(views) != 1 || views[0].Project.Name != projectName {
+		t.Fatalf("views = %+v", views)
 	}
 	if _, err := svc.Update(projectName, project.Project{Name: projectName, Path: "/work/new"}); err != nil {
 		t.Fatal(err)
@@ -113,26 +113,10 @@ func TestProjectsIndependentOfBundleRootAndNamesNeverReachBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(views[0].Bindings) != 0 {
-		t.Fatalf("changing a project path rewrote or non-literally matched a binding: %+v", views[0].Bindings)
+	if len(views) != 1 || views[0].Project.Path != "/work/new" {
+		t.Fatalf("after update = %+v", views)
 	}
-	bindingBytes, err := os.ReadFile(filepath.Join(bundleA, "bindings", "matching.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(bindingBytes) != "profile: engineer\nscope: /work/a\n" {
-		t.Fatalf("binding changed with project path: %q", bindingBytes)
-	}
-	if err := rootStore.Save(bundleB); err != nil {
-		t.Fatal(err)
-	}
-	views, err = svc.List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(views) != 1 || views[0].Project.Name != projectName || views[0].Project.Path != "/work/new" || len(views[0].Bindings) != 0 {
-		t.Fatalf("after root change = %+v", views)
-	}
+
 	for _, root := range []string{bundleA, bundleB} {
 		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {

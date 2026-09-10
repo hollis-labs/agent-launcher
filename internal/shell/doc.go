@@ -58,8 +58,8 @@
 //     the intended route and it does not depend on the hotkey.
 //
 //  2. Editing the preferences file by hand. It lives at
-//     internal/state.Root()/shell.json — on macOS that is
-//     ~/Library/Application Support/Tachyon/shell.json — and the accelerator
+//     internal/state.ConfigDir()/shell.json — on macOS that is
+//     ~/.config/tachyon/shell.json — and the accelerator
 //     is the top-level "hotkey" key, in Wails' accelerator spelling, e.g.
 //     "Ctrl+Option+Space". Change it and restart Tachyon. A value that cannot
 //     be bound is replaced with DefaultHotkey at load rather than leaving the

@@ -1,11 +1,8 @@
 package skeleton
 
 import (
-	"fmt"
 	"path"
 	"strings"
-
-	"github.com/hollis-labs/tachyon/internal/binding"
 )
 
 // --- relPath functions: where each kind lands, mirroring internal/bundle's
@@ -13,26 +10,15 @@ import (
 // joins here — rather than exporting bundle's dirProfiles/dirTemplates/etc. —
 // keeps the creation package coupled only to bundle's public surface. The
 // bundle itself independently owns enumeration and resolution of both profile
-// locations. bundle.KindBinding's relPath is [binding.BindingRelPath] itself,
+// locations.
 // rather than a function here —
 // see [registry]'s own doc for why. ---
 
-func profileRelPath(id string) string   { return path.Join("profiles", id+".md") }
-func partRelPath(id string) string      { return path.Join("profiles", "parts", id+".md") }
-func roleProseRelPath(id string) string { return path.Join("templates", "roles", id+".md") }
-func templateRelPath(id string) string  { return path.Join("templates", id+".md") }
-func promptRelPath(id string) string    { return path.Join("prompts", id+".md") }
-func skillRelPath(id string) string     { return path.Join("skills", id, "SKILL.md") }
-
-// bindingRefID derives the ID a new binding's [bundle.Ref] carries: its
-// filename, extension included — path.Base of the same
-// [binding.BindingRelPath] call [entry.relPath] already made to place the
-// file, so the extension is spelled in exactly the one place
-// (internal/binding) that owns it, not duplicated here as a literal
-// ".yaml". This matches bundle.BindingID's own documented convention
-// ("the format is not pinned and the extension is part of the name") that
-// every other kind's ID deliberately does not follow — see [entry.refID].
-func bindingRefID(id string) string { return path.Base(binding.BindingRelPath(id)) }
+func profileRelPath(id string) string  { return path.Join("profiles", id+".md") }
+func partRelPath(id string) string     { return path.Join("profiles", "parts", id+".md") }
+func templateRelPath(id string) string { return path.Join("templates", id+".md") }
+func promptRelPath(id string) string   { return path.Join("prompts", id+".md") }
+func skillRelPath(id string) string    { return path.Join("skills", id, "SKILL.md") }
 
 // profileScaffold renders profiles/<id>.md.
 //
@@ -56,8 +42,12 @@ func profileScaffold(spec Spec) []byte {
 	b.WriteString("extends: base\n")
 	b.WriteString(scalarLine("name", displayName(spec)))
 	b.WriteString(scalarLine("description", spec.Description))
-	b.WriteString("provider: claude\n")
 	b.WriteString("spec: {}\n")
+	b.WriteString("# No provider. A runtime is a launch's to choose, not an agent's to\n")
+	b.WriteString("# carry: no profile in this catalog declares one, and Tachyon supplies\n")
+	b.WriteString("# it from the launch profile instead. Adding `provider:` here would put\n")
+	b.WriteString("# it back where it just left.\n")
+	b.WriteString("#\n")
 	b.WriteString("# Every profile inherits base's templates, standing prose, install\n")
 	b.WriteString("# skills and settings (profiles/base.md) and adds only what makes it\n")
 	b.WriteString("# this role. See profiles/architect.md, profiles/engineer.md and the\n")
@@ -67,13 +57,25 @@ func profileScaffold(spec Spec) []byte {
 	b.WriteString("# Replace `spec: {}` above with something like:\n")
 	b.WriteString("#\n")
 	b.WriteString("# spec:\n")
-	b.WriteString("#   slots:\n")
-	b.WriteString("#     - name: role\n")
-	b.WriteString(fmt.Sprintf(
-		"#       source: { kind: static_file, static_file: { path: $CAIRN_PROFILE_ROOT/templates/roles/%s.md } }\n",
-		spec.ID))
 	b.WriteString("#   skills: [skill-one, skill-two]\n")
+	b.WriteString("#   subagents: [reviewer]\n")
 	b.WriteString("---\n")
+	b.WriteString("\n")
+	b.WriteString("<!-- Below the frontmatter is the profile's BODY, and it is a template.\n")
+	b.WriteString("     Sections fill the holes the layout yields:\n")
+	b.WriteString("\n")
+	b.WriteString("       {{ section charter }}\n")
+	b.WriteString("       # " + displayName(spec) + "\n")
+	b.WriteString("       What this role decides that no other role decides.\n")
+	b.WriteString("       {{ end }}\n")
+	b.WriteString("\n")
+	b.WriteString("       {{ section lens }}\n")
+	b.WriteString("       {{ file: $CAIRN_PROFILE_ROOT/templates/lenses/<a-lens>.md }}\n")
+	b.WriteString("       {{ end }}\n")
+	b.WriteString("\n")
+	b.WriteString("     A profile declaring only sections is a fragment, and base.md\n")
+	b.WriteString("     supplies the shape. profiles/engineer.md is the worked example.\n")
+	b.WriteString("     Delete this comment once real content replaces it. -->\n")
 	return []byte(b.String())
 }
 
@@ -90,99 +92,42 @@ func partScaffold(spec Spec) []byte {
 		"---\n")
 }
 
-// roleProseScaffold renders templates/roles/<id>.md.
-//
-// A bare prose file, since — per CW-20260903-0010's task body — that is all
-// a role prose file is: no frontmatter, no markers. See
-// templates/roles/architect.md and templates/roles/writer.md in this bundle
-// for the real shape: a "# Title" heading, then a handful of short
-// paragraphs about what this role decides and does not.
-//
-// The one thing worth saying that isn't visible in those two files is what
-// this file IS: the content a profile's "role" slot pulls in through a
-// static_file source, and a separate artifact kind from the profile that
-// shares its basename (the conflation trap internal/bundle's package doc and
-// CW-20260903-0009 both name). That note is written as an HTML comment so it
-// stays invisible once rendered and does not read as part of the role's own
-// voice.
-func roleProseScaffold(spec Spec) []byte {
-	var b strings.Builder
-	b.WriteString("# " + displayName(spec) + "\n")
-	b.WriteString("\n")
-	b.WriteString("<!-- Prose only -- no frontmatter, no markers. This file becomes the\n")
-	b.WriteString("     \"role\" slot's content for whichever profile's spec.slots points a\n")
-	b.WriteString("     role slot's static_file at this path (profiles/architect.md shows the\n")
-	b.WriteString("     pattern). It is a separate artifact from any profile sharing this same\n")
-	b.WriteString("     basename -- see internal/bundle's package doc on the two \"role\"s.\n")
-	b.WriteString("     Say what this role decides that no other role decides, and what it\n")
-	b.WriteString("     does not do. Delete this comment once real prose replaces it. -->\n")
-	return []byte(b.String())
-}
-
 // templateScaffold renders templates/<id>.md.
 //
-// This is where CW-20260903-0010 requires two rules to be stated as
-// comments, because D8 means nothing checks them and a typo degrades
-// silently (see below). Both were verified directly against
-// github.com/chrispian/cairn/bootdir/template.go, not just against this
-// bundle's own templates/agents.md, before being written here:
+// A template is prose a profile pulls in, and that is now the whole of it.
+// It carries no markers and no directives: cairn's template engine puts the
+// verbs in the PROFILE — `{{ extends }}`, `{{ section }}`, `{{ yield }}`,
+// `{{ value }}`, `{{ parent }}` — and a file named by `{{ file: ... }}` is
+// substituted whole.
 //
-//   - ValueNames() in that file returns exactly
-//     []string{"binding", "model", "profile", "provider", "scope", "session"}
-//     -- the six names cairn:value fills from. fills() reports false for
-//     anything else, Substitute renders the empty string for it, and Unfilled
-//     is what puts a warning on stderr for it -- the boot itself still exits
-//     0 (Substitute returns no error for an unknown value name; this
-//     changed under CW-20260902-0009, which is why the comment says so).
-//   - Substitute's own doc comment states the line rule verbatim: "A line
-//     that held nothing but markers and whitespace ... is removed entirely
-//     -- its newline with it, ... A marker that shares its line with content
-//     is the other case: only the marker goes, and the line stays exactly as
-//     it was written." templates/agents.md in this bundle is the real file
-//     that rule was independently re-verified against: line 14,
-//     "- scope: <!-- cairn:value scope -->", is exactly the shared-line
-//     example this scaffold repeats.
+// This scaffold used to teach the marker engine: the six names
+// `cairn:value` filled from, and the rules about what a marker's own line
+// did when it rendered nothing. agent-setup moved off that engine on
+// 2026-09-10 (profiles became templates in their own right) and templates/
+// grew lenses/ and projects/ in place of roles/. Teaching markers now would
+// hand someone a document the live bundle has no reader for.
 //
-// The explanatory block below is itself an HTML comment, and was checked
-// against cairn's own markerPattern regexp (`<!--\s*cairn:(.*?)-->`) to
-// confirm it cannot itself be misread as a marker: the pattern requires
-// "cairn:" immediately after "<!--" and optional whitespace, and this
-// block's first line is prose, not whitespace-then-"cairn:", so the regex
-// never starts a match there. Only the two markers after it — cairn:slot
-// example and cairn:value scope — match.
+// What it deliberately does NOT teach is the profile-side syntax. That
+// belongs beside a profile, and profiles/base.md is the worked example.
 func templateScaffold(spec Spec) []byte {
 	_ = spec // no field of Spec is used by this scaffold today
 	var b strings.Builder
 	b.WriteString("<!--\n")
-	b.WriteString("  New template scaffold. A template is a document containing cairn:slot\n")
-	b.WriteString("  and cairn:value markers -- see templates/agents.md in this bundle for\n")
-	b.WriteString("  the real one Cairn assembles AGENTS.md from.\n")
+	b.WriteString("  New template. This file is prose, pulled into a profile whole:\n")
 	b.WriteString("\n")
-	b.WriteString("  Two rules, unchecked by anything (D8) -- this comment is where they get\n")
-	b.WriteString("  said, because nothing else says them:\n")
+	b.WriteString("      {{ section context }}\n")
+	b.WriteString("      {{ file: $CAIRN_PROFILE_ROOT/templates/<this file> }}\n")
+	b.WriteString("      {{ end }}\n")
 	b.WriteString("\n")
-	b.WriteString("  1. `cairn:value <name>` fills from exactly SIX instance facts:\n")
-	b.WriteString("       binding, model, profile, provider, scope, session\n")
-	b.WriteString("     Any other name -- a typo included -- renders nothing, and cairn\n")
-	b.WriteString("     warns on stderr, but the boot still exits 0 (as of CW-20260902-0009).\n")
-	b.WriteString("     Read the name back against this list; nothing else will catch it.\n")
+	b.WriteString("  So there is nothing to declare here and no syntax to get right --\n")
+	b.WriteString("  every directive lives in the profile that names this file. See\n")
+	b.WriteString("  profiles/base.md and profiles/engineer.md in this bundle for the\n")
+	b.WriteString("  worked examples, and templates/lenses/ for prose in this shape.\n")
 	b.WriteString("\n")
-	b.WriteString("  2. What happens to a marker's own line when it substitutes nothing:\n")
-	b.WriteString("       - A marker ALONE on its line takes the whole line with it, newline\n")
-	b.WriteString("         included. Put optional markers on adjacent lines, with no blank\n")
-	b.WriteString("         line between them, if you want them to vanish cleanly as a group.\n")
-	b.WriteString("       - A marker SHARING its line with other content keeps the line. See\n")
-	b.WriteString("         the \"- scope:\" example below: with no scope at boot it still\n")
-	b.WriteString("         renders \"- scope: \" -- only the marker itself goes.\n")
-	b.WriteString("     Blank lines you write between markers are your content and survive;\n")
-	b.WriteString("     Cairn never reformats prose.\n")
+	b.WriteString("  Subdirectories are yours to organize: templates/lenses/x.md is the\n")
+	b.WriteString("  template \"lenses/x\". Delete this comment once real content\n")
+	b.WriteString("  replaces it.\n")
 	b.WriteString("-->\n")
-	b.WriteString("\n")
-	b.WriteString("<!-- cairn:slot example -->\n")
-	b.WriteString("\n")
-	b.WriteString("## Example\n")
-	b.WriteString("\n")
-	b.WriteString("- scope: <!-- cairn:value scope -->\n")
 	return []byte(b.String())
 }
 
@@ -218,13 +163,13 @@ func promptScaffold(spec Spec) []byte {
 	b.WriteString("     this file whole at .claude/commands/boot/" + spec.ID + ".md once it is\n")
 	b.WriteString("     declared (spec.prompts, or --prompt " + spec.ID + " for one launch), so a\n")
 	b.WriteString("     running session can invoke it as /boot:" + spec.ID + " -- nothing in\n")
-	b.WriteString("     Tachyon delivers it any other way. Per prompts/README.md in this\n")
-	b.WriteString("     bundle: \"A prompt is a template. It carries the same\n")
-	b.WriteString("     <!-- cairn:slot ... --> and <!-- cairn:value ... --> markers\n")
-	b.WriteString("     templates/ does\" -- substituted from the same slots and instance\n")
-	b.WriteString("     values a template's markers are. Nothing checks a marker's name or\n")
-	b.WriteString("     that it resolves to anything real (D8). Delete this comment and\n")
-	b.WriteString("     write the prompt's own content. -->\n")
+	b.WriteString("     Tachyon delivers it any other way; a person types the command.\n")
+	b.WriteString("\n")
+	b.WriteString("     Only the Claude tree plants prompts. A Codex boot has nowhere to\n")
+	b.WriteString("     put them, drops them, and says so on stderr -- the boot directory\n")
+	b.WriteString("     is otherwise complete.\n")
+	b.WriteString("\n")
+	b.WriteString("     Delete this comment and write the prompt's own content. -->\n")
 	return []byte(b.String())
 }
 
@@ -247,48 +192,6 @@ func skillScaffold(spec Spec) []byte {
 	b.WriteString("     whatever procedure or reference this skill exists to save someone\n")
 	b.WriteString("     from re-deriving. Delete this comment once real content replaces\n")
 	b.WriteString("     it. -->\n")
-	return []byte(b.String())
-}
-
-// bindingScaffold renders bindings/<id>.yaml.
-//
-// It deliberately does NOT go through internal/binding's own
-// [binding.Store.Create]: that requires non-empty Profile and Scope
-// ([binding.Binding.Validate]), and Spec carries neither for a binding —
-// unlike a profile's "spec: {}" or a skill's blank body, "profile" and
-// "scope" are the only two things a binding file has, so there is no
-// content left to leave blank except those two values themselves. This
-// scaffold leaves both keys present with empty values ("profile:\n" /
-// "scope:\n"), matching the same "start blank, let the user fill in the
-// one thing that must be theirs" idiom every other scaffold in this file
-// uses. internal/binding's own scan treats a present-but-empty key as
-// valid, not corrupt (see that package's scan.go, scanScalarToken) — a
-// freshly scaffolded binding is readable immediately, if obviously
-// incomplete, rather than making the whole bindings/ directory fail to
-// list until it is edited (see that package's doc, "shape and existence
-// only, now failed loud," for why a truly *unrecognized* file — missing
-// either key entirely — is not this package's concern to avoid, but a
-// present, empty key is not that).
-//
-// This is "at minimum produce the exact same on-disk shape internal/binding
-// itself writes" (this task's own allowance) rather than "call
-// [binding.Store.Create] directly" (its stated preference) — a deliberate,
-// narrow exception to "don't reimplement file-writing logic" for exactly
-// the reason above, not an oversight. [registry]'s relPath for
-// bundle.KindBinding is [binding.BindingRelPath] itself, not a function
-// defined in this file, which is what keeps bindings/'s directory name and
-// ".yaml" extension known in exactly one place despite this scaffold's
-// content being written here rather than by internal/binding.
-func bindingScaffold(spec Spec) []byte {
-	_ = spec // no field of Spec is used by this scaffold today
-	var b strings.Builder
-	b.WriteString("# New binding -- `cairn boot <name>` looks here first, falling back to a\n")
-	b.WriteString("# profile of the same id. profile names a profile under profiles/\n")
-	b.WriteString("# (refused when the catalog is read if it does not exist, not here);\n")
-	b.WriteString("# scope is a literal path, never one of ../scopes.yaml's own alias keys.\n")
-	b.WriteString("# See bindings/README.md in this bundle for the full shape.\n")
-	b.WriteString("profile:\n")
-	b.WriteString("scope:\n")
 	return []byte(b.String())
 }
 

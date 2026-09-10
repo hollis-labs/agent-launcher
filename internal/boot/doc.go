@@ -3,7 +3,7 @@
 // terminal opens on top of them.
 //
 // This package owns three things: deriving a stable directory key for a
-// binding or an unsaved composition, clearing that key's path before the
+// composition, clearing that path before the
 // next plant, and — as of T10, CW-20260903-0014 — running the one Cairn
 // invocation a launch needs and decoding its --json report. See [Invoke],
 // [Result] and [HarnessArgv] in invoke.go for that part; the package doc
@@ -61,8 +61,8 @@
 // directories are disposable; the entries are not, and a launcher — one
 // click per session, no human pause to reconsider — compounds that faster
 // than a person typing commands does. The fix is structural: one boot
-// directory per binding or saved composition, re-materialized in place, so
-// there is one trust entry per binding, forever, rather than one per launch.
+// directory per composition, re-materialized in place, so there is one trust
+// entry per composition, forever, rather than one per launch.
 //
 // Cairn plants at <boot-root>/<name>/<session> (bootdir.Location in Cairn's
 // own source). A stable directory therefore needs a stable --session, not
@@ -96,40 +96,30 @@
 //
 // # Deriving the key
 //
-// [Key] takes a caller-supplied seed — a saved binding's name, or, for an
-// unsaved composition, some canonical identity string the caller builds
-// from the composition's content — and returns a filesystem-safe key that
+// [Key] takes a caller-supplied seed and returns a filesystem-safe key that
 // is stable across restarts (same seed, same key, forever) and that never
-// collides between two different seeds.
+// collides between two different seeds. [SessionKey] does the same for the
+// other segment, over the rest of a composition.
 //
-// A saved binding's name is already constrained (see internal/binding's
-// nameRe) to the character set a single path segment can hold outright:
-// [A-Za-z0-9_.-], starting with an alphanumeric. [Key] recognizes that case
-// and returns such a seed completely unchanged. That is deliberate, not
-// just an optimization: target architecture §5 says the planted path is
-// <boot-root>/<key>/current precisely because Cairn's own <name> path
-// segment is the same string a caller passes as the boot target (`cairn
-// boot <binding>`). If [Key] transformed an already-safe binding name, this
-// package's idea of where current lives would drift from where Cairn
-// actually plants it. Passing the same string as both the boot target and
-// the seed to [Key] keeps the two in sync by construction.
+// A bare agent profile id is already a single path segment — [A-Za-z0-9_.-],
+// starting with an alphanumeric — and [Key] recognizes that case and returns
+// such a seed completely unchanged. That is deliberate rather than an
+// optimization: the planted path is <boot-root>/<key>/<session> precisely
+// because Cairn's own <name> segment is the target it was given, so a Key
+// that transformed an already-safe id would name a directory Cairn never
+// writes into.
 //
-// A seed that is not already safe — the shape an unsaved composition's
-// identity string is expected to take, since nothing constrains it the way
-// a binding name is constrained — is never used as-is. [Key] sanitizes it
-// into a short, readable slug for humans browsing the boot root, then
-// appends a full SHA-256 hex digest of the original, untransformed seed.
-// The slug exists only for readability; the hash is what makes the result
-// collision-safe, because it is a lossless function of the whole seed, not
-// of the lossy slug two different seeds might sanitize down to the same
-// string.
+// [SessionKey]'s seed is not constrained that way — half of it is a scope,
+// an arbitrary absolute path — so it is never used as-is: it sanitizes to a
+// readable slug and appends a digest of the whole seed, which is what
+// carries the collision guarantee.
 //
-// This package deliberately does not know what a binding or a composition
-// is — it takes strings. Coupling this package to internal/binding's
-// [binding.Binding] type or to a Composition type owned by internal/compose
+// This package deliberately does not know what a composition is — it takes
+// strings. Coupling this package to a Composition type owned by
+// internal/compose
 // (T08, CW-20260903-0012) would cut against its own stated scope,
 // "directory lifecycle only," and would make it a dependency of packages
-// that are still in motion. Callers decide what seed identifies a binding
+// that are still in motion. Callers decide what seed identifies a
 // or a composition; this package only guarantees what it does with that
 // string once handed one.
 package boot

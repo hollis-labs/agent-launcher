@@ -23,9 +23,15 @@ import (
 // again, against the real binary, when one is available.
 func TestRunNeverMovesCurrentAside(t *testing.T) {
 	scratchRoot := t.TempDir()
-	const target = "some-binding"
+	const (
+		target     = "engineer"
+		launchPath = "/config/tachyon/launch/debug.md"
+	)
+	scope := "/some/scope"
 	key := boot.Key(target)
-	currentDir := boot.CurrentPath(scratchRoot, key)
+	session := boot.SessionKey(launchPath)
+	projectRoot := filepath.Join(scratchRoot, boot.ProjectKey(scope))
+	currentDir := boot.SessionPath(projectRoot, key, session)
 
 	// Seed a boot directory exactly like one a previous, real cairn boot
 	// would have planted — the state Run is supposed to find and leave
@@ -38,7 +44,6 @@ func TestRunNeverMovesCurrentAside(t *testing.T) {
 		t.Fatalf("seeding fake plant: %v", err)
 	}
 
-	scope := "/some/scope"
 	fakeResult := boot.Result{
 		BootDir:       currentDir,
 		Provider:      "claude",

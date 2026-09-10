@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/compose"
+	"github.com/hollis-labs/tachyon/internal/launch"
 )
 
 // Config is one debug run's inputs: exactly what [Run] needs to resolve a
@@ -13,8 +16,7 @@ import (
 // same defaults the app itself would use (bundle.DefaultRootStore,
 // state.BootRoot); a test fills it in directly.
 type Config struct {
-	// Target is the boot target: a saved binding's name, or a bare profile
-	// id. Required.
+	// Target is the boot target: a bare agent profile id. Required.
 	Target string
 	// Bundle is the active bundle root. Required.
 	Bundle string
@@ -22,14 +24,19 @@ type Config struct {
 	// this command never defaults it silently any more than
 	// internal/compose.Build does.
 	BootRoot string
-	// Scope, if non-empty, overrides the binding's own scope (cairn boot
-	// --scope). Optional.
+	// Scope, if non-empty, is the directory the instance works in (cairn
+	// boot --scope). Optional.
 	Scope string
-	// Provider, if non-empty, is the harness to materialize into (cairn
-	// boot --provider). Empty renders whatever the resolved profile
-	// declares, exactly as the app's own launch path does when the compose
-	// form leaves the control at its default. Optional.
-	Provider string
+	// LaunchProfile, if non-empty, is the PATH of a launch profile to fold
+	// in (cairn boot --with). It is a path rather than a name because this
+	// command takes every other input as a literal too — it is the
+	// no-app-state debugging path, and resolving a name would mean reading
+	// the store this command exists to bypass.
+	//
+	// Empty means no launch profile, which means no provider, which cairn
+	// refuses. That is the same refusal the app gets and is usually the
+	// point of running this command.
+	LaunchProfile string
 }
 
 // Report is everything one [Run] learned, in typed form, so main.go's
@@ -48,10 +55,11 @@ type Report struct {
 	// Key is boot.Key(Composition.Target): the directory segment cairn
 	// plants into.
 	Key string
-	// ExpectedBootDir is boot.CurrentPath(Composition.BootRoot, Key),
-	// computed independently of anything cairn reports — a caller can
-	// compare it against Result.BootDir to catch exactly the drift
-	// internal/boot's TestKeyReconcilesWithRealCairnPlant guards against.
+	// ExpectedBootDir is boot.SessionPath over Composition's own BootRoot,
+	// Key and Session, computed independently of anything cairn reports — a
+	// caller can compare it against Result.BootDir to catch exactly the
+	// drift internal/boot's TestKeyReconcilesWithRealCairnPlant guards
+	// against.
 	ExpectedBootDir string
 
 	// Stderr is cairn's captured stderr, present whether or not the run
@@ -114,12 +122,17 @@ type Report struct {
 // showing that to a person benefits from seeing what was about to run, not
 // just that it failed.
 func Run(ctx context.Context, cfg Config, runner boot.Runner) (Report, error) {
+	// The same three segments internal/launch builds, computed the same way:
+	// <boot-root>/<project>/<profile>/<launch profile>. This command exists
+	// to show what a launch would do, so it must not compute the path a
+	// second, differently.
 	comp := compose.Composition{
 		Target:   cfg.Target,
 		Bundle:   cfg.Bundle,
-		Provider: cfg.Provider,
-		BootRoot: cfg.BootRoot,
+		BootRoot: boot.ProjectRoot(cfg.BootRoot, cfg.Scope),
 		Scope:    cfg.Scope,
+		Session:  boot.SessionKey(launchProfileName(cfg.LaunchProfile)),
+		Parts:    launch.PartsWith(cfg.LaunchProfile, nil),
 	}
 
 	argv, err := compose.Build(comp)
@@ -132,7 +145,7 @@ func Run(ctx context.Context, cfg Config, runner boot.Runner) (Report, error) {
 		Composition:     comp,
 		Argv:            argv,
 		Key:             key,
-		ExpectedBootDir: boot.CurrentPath(cfg.BootRoot, key),
+		ExpectedBootDir: boot.SessionPath(comp.BootRoot, key, comp.Session),
 	}
 
 	result, stderr, invokeErr := boot.Invoke(ctx, runner, argv)
@@ -155,6 +168,26 @@ func Run(ctx context.Context, cfg Config, runner boot.Runner) (Report, error) {
 		report.ProviderHome, report.ProviderHomeErr = boot.ResolveHome(key)
 	}
 	return report, nil
+}
+
+// launchProfileName is the name the launch store would address this file
+// by: its basename without the extension.
+//
+// This command takes a launch profile as a PATH — it is the no-app-state
+// debugging path, and resolving a name would mean reading the store it
+// exists to bypass — but the app passes a NAME, and boot.SessionKey turns a
+// name into the boot directory's leaf segment. Deriving the name back out
+// here is what keeps this command showing the path a real launch would use
+// rather than a hash of the path it was handed.
+//
+// A file outside the store whose basename happens to match one inside it
+// would report the same leaf. That is a debugging tool's business, not a
+// launch's: nothing here plants anything the app will later find.
+func launchProfileName(path string) string {
+	if path == "" {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
 
 // argvHasFlag reports whether flag appears as one of argv's own elements

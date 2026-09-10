@@ -9,10 +9,10 @@ import {
 
 const reduce = (state, ...actions) => actions.reduce(compositionDraftReducer, state);
 
-function populatedBindingDraft(target = "binding-a") {
+function populatedDraft(target = "engineer") {
   return reduce(
     createCompositionDraft(),
-    { type: "OPEN_BINDING", target },
+    { type: "OPEN_TARGET", target },
     { type: "ADD_PART", value: "reviewer" },
     { type: "UPDATE_FIELD", field: "partDraft", value: "pending-part" },
     { type: "ADD_SKILLS", values: ["commit", "push"] },
@@ -22,23 +22,23 @@ function populatedBindingDraft(target = "binding-a") {
     { type: "ADD_SET", value: { slot: "tone", value: "terse" } },
     { type: "UPDATE_FIELD", field: "setSlotDraft", value: "model" },
     { type: "UPDATE_FIELD", field: "setValueDraft", value: "fast" },
-    { type: "UPDATE_FIELD", field: "provider", value: " codex " },
+    { type: "UPDATE_FIELD", field: "launchProfile", value: " codex " },
     { type: "UPDATE_FIELD", field: "scope", value: " /work/tachyon " },
   );
 }
 
-test("passive hide retains every field, modal mode, and captured binding", () => {
-  const before = populatedBindingDraft();
+test("passive hide retains every field, modal mode, and captured target", () => {
+  const before = populatedDraft();
   const hidden = compositionDraftReducer(before, { type: "HIDE" });
 
   assert.deepEqual(hidden, { ...before, retained: true });
   assert.equal(hidden.open, true);
-  assert.equal(hidden.target, "binding-a");
+  assert.equal(hidden.target, "engineer");
   assert.deepEqual(compositionInput(hidden), {
-    target: "binding-a",
+    target: "engineer",
+    launchProfile: "codex",
     skills: ["commit", "push"],
     prompts: ["report"],
-    provider: "codex",
     scope: "/work/tachyon",
     sets: [{ slot: "tone", value: "terse" }],
     parts: ["reviewer"],
@@ -46,26 +46,26 @@ test("passive hide retains every field, modal mode, and captured binding", () =>
 });
 
 test("an open draft refuses target switching from palette selection", () => {
-  const draft = populatedBindingDraft("binding-a");
+  const draft = populatedDraft("engineer");
 
   assert.strictEqual(
-    compositionDraftReducer(draft, { type: "OPEN_BINDING", target: "binding-b" }),
+    compositionDraftReducer(draft, { type: "OPEN_TARGET", target: "architect" }),
     draft,
   );
-  assert.strictEqual(compositionDraftReducer(draft, { type: "OPEN_PROFILE" }), draft);
-  assert.equal(compositionInput(draft).target, "binding-a");
+  assert.strictEqual(compositionDraftReducer(draft, { type: "OPEN_BLANK" }), draft);
+  assert.equal(compositionInput(draft).target, "engineer");
 });
 
-test("one-time profile becomes immutable only after explicit capture", () => {
+test("a typed target becomes immutable only after explicit capture", () => {
   const choosing = reduce(
     createCompositionDraft(),
-    { type: "OPEN_PROFILE" },
+    { type: "OPEN_BLANK" },
     { type: "SET_TARGET_DRAFT", value: " engineer " },
   );
   assert.equal(choosing.target, "");
   assert.equal(compositionInput(choosing), null);
 
-  const captured = compositionDraftReducer(choosing, { type: "CAPTURE_PROFILE" });
+  const captured = compositionDraftReducer(choosing, { type: "CAPTURE_TARGET" });
   assert.equal(captured.target, "engineer");
   assert.equal(captured.targetDraft, "engineer");
   assert.strictEqual(
@@ -81,75 +81,96 @@ test("one-time profile becomes immutable only after explicit capture", () => {
   );
   assert.equal(retained.open, true);
   assert.equal(retained.retained, true);
-  assert.equal(retained.mode, "profile");
+  assert.equal(retained.mode, "typed");
   assert.equal(retained.target, "engineer");
   assert.equal(retained.targetDraft, "engineer");
   assert.equal(compositionInput(retained).scope, "/work/one-time");
 });
 
-test("provider is an untouched-by-default override that is trimmed on the way out", () => {
-  const untouched = compositionDraftReducer(createCompositionDraft(), {
-    type: "OPEN_BINDING",
-    target: "binding-a",
+test("a draft opens on the launch profile and project it was given", () => {
+  const opened = compositionDraftReducer(createCompositionDraft(), {
+    type: "OPEN_TARGET",
+    target: "engineer",
+    defaults: { launchProfile: "default", scope: "/work/tachyon" },
   });
-  assert.equal(untouched.provider, "");
-  // The empty string is the ordinary case, not a missing value: it means
-  // Tachyon sends no --provider flag at all and the resolved profile
-  // cascade picks the harness.
-  assert.equal(compositionInput(untouched).provider, "");
+  assert.equal(opened.launchProfile, "default");
+  assert.equal(opened.scope, "/work/tachyon");
 
+  // Skills and prompts are NEVER seeded, whatever defaults say. cairn's
+  // --skill and --prompt are additive only, so a pre-filled control would
+  // let someone remove an entry and silently get it anyway.
+  assert.deepEqual(opened.skills, []);
+  assert.deepEqual(opened.prompts, []);
+
+  const bare = compositionDraftReducer(createCompositionDraft(), {
+    type: "OPEN_TARGET",
+    target: "engineer",
+  });
+  assert.equal(bare.launchProfile, "");
+  // An empty launch profile means no provider, which cairn refuses. That is
+  // the intended shape rather than a gap -- the palette supplies a default
+  // because internal/launchprofile seeds one.
+  assert.equal(compositionInput(bare).launchProfile, "");
+});
+
+test("the launch profile is trimmed on the way out", () => {
+  const untouched = compositionDraftReducer(createCompositionDraft(), {
+    type: "OPEN_TARGET",
+    target: "engineer",
+  });
   const chosen = compositionDraftReducer(
     { ...untouched, launchError: "cairn refused the composition" },
-    { type: "UPDATE_FIELD", field: "provider", value: "  codex  " },
+    { type: "UPDATE_FIELD", field: "launchProfile", value: "  codex  " },
   );
-  assert.equal(chosen.provider, "  codex  ");
+  assert.equal(chosen.launchProfile, "  codex  ");
   assert.equal(chosen.launchError, "");
-  assert.equal(compositionInput(chosen).provider, "codex");
+  assert.equal(compositionInput(chosen).launchProfile, "codex");
+});
 
-  // Free text reaches Cairn unchanged; only Cairn decides what a provider is.
-  const unknown = compositionDraftReducer(untouched, {
-    type: "UPDATE_FIELD",
-    field: "provider",
-    value: "opencode",
-  });
-  assert.equal(compositionInput(unknown).provider, "opencode");
+test("no provider ever reaches the launch input", () => {
+  // --provider is gone: the provider is declared in the launch profile and
+  // folded in by cairn's cascade. A field here would be a second source for
+  // one value, and the two could disagree.
+  const draft = populatedDraft();
+  assert.equal("provider" in draft, false);
+  assert.equal("provider" in compositionInput(draft), false);
 });
 
 test("Clear removes every override and pending input but preserves target and mode", () => {
-  const before = compositionDraftReducer(populatedBindingDraft(), { type: "HIDE" });
+  const before = compositionDraftReducer(populatedDraft(), { type: "HIDE" });
   const cleared = compositionDraftReducer(before, { type: "CLEAR" });
 
   assert.equal(cleared.open, true);
-  assert.equal(cleared.mode, "binding");
-  assert.equal(cleared.target, "binding-a");
+  assert.equal(cleared.mode, "picked");
+  assert.equal(cleared.target, "engineer");
   assert.equal(cleared.draftId, before.draftId);
   assert.equal(cleared.retained, false);
   assert.deepEqual(compositionInput(cleared), {
-    target: "binding-a",
+    target: "engineer",
+    launchProfile: "",
     skills: [],
     prompts: [],
-    provider: "",
     scope: "",
     sets: [],
     parts: [],
   });
   for (const field of [
-    "skillDraft", "promptDraft", "provider", "scope", "partDraft", "setSlotDraft", "setValueDraft",
+    "skillDraft", "promptDraft", "launchProfile", "scope", "partDraft", "setSlotDraft", "setValueDraft",
   ]) assert.equal(cleared[field], "", `${field} should be cleared`);
 });
 
 test("Discard & close clears the whole draft and permits a different target", () => {
-  const before = populatedBindingDraft("binding-a");
+  const before = populatedDraft("engineer");
   const discarded = compositionDraftReducer(before, { type: "DISCARD" });
 
   assert.deepEqual(discarded, createCompositionDraft(before.draftId + 1));
-  const next = compositionDraftReducer(discarded, { type: "OPEN_BINDING", target: "binding-b" });
+  const next = compositionDraftReducer(discarded, { type: "OPEN_TARGET", target: "architect" });
   assert.equal(next.open, true);
-  assert.equal(next.target, "binding-b");
+  assert.equal(next.target, "architect");
 });
 
 test("failed launch retains the entire draft and records its error", () => {
-  const before = populatedBindingDraft();
+  const before = populatedDraft();
   const started = compositionDraftReducer(before, { type: "LAUNCH_START", draftId: before.draftId });
   const failed = compositionDraftReducer(started, {
     type: "LAUNCH_FAILURE",
@@ -165,7 +186,7 @@ test("failed launch retains the entire draft and records its error", () => {
 });
 
 test("successful launch consumes and closes the draft", () => {
-  const before = populatedBindingDraft();
+  const before = populatedDraft();
   const started = compositionDraftReducer(before, { type: "LAUNCH_START", draftId: before.draftId });
   const succeeded = compositionDraftReducer(started, {
     type: "LAUNCH_SUCCESS",
@@ -177,11 +198,11 @@ test("successful launch consumes and closes the draft", () => {
 });
 
 test("late launch outcomes cannot clear or contaminate a replacement draft", () => {
-  const first = populatedBindingDraft("binding-a");
+  const first = populatedDraft("engineer");
   const replacement = reduce(
     first,
     { type: "DISCARD" },
-    { type: "OPEN_BINDING", target: "binding-b" },
+    { type: "OPEN_TARGET", target: "architect" },
     { type: "ADD_SKILLS", values: ["new-skill"] },
   );
 
@@ -189,6 +210,6 @@ test("late launch outcomes cannot clear or contaminate a replacement draft", () 
     { type: "LAUNCH_SUCCESS", draftId: first.draftId },
     { type: "LAUNCH_FAILURE", draftId: first.draftId, error: "old error" },
   ]) assert.strictEqual(compositionDraftReducer(replacement, stale), replacement);
-  assert.equal(replacement.target, "binding-b");
+  assert.equal(replacement.target, "architect");
   assert.equal(replacement.launchError, "");
 });

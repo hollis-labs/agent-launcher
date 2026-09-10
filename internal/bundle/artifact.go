@@ -1,59 +1,57 @@
 package bundle
 
-// Kind names one of the seven artifact kinds a bundle holds.
+// Kind names one of the five artifact kinds a bundle holds.
 //
-// The kind is part of an artifact's identity, not a label on it: profiles and
-// role prose share every basename in the bundle, so an id alone does not name
-// a file.
+// The kind is part of an artifact's identity, not a label on it: an id alone
+// does not name a file.
+//
+// Two kinds retired on 2026-09-10, and neither is coming back under another
+// name. KindRoleProse read templates/roles/*.md, which agent-setup deleted
+// when profiles became templates in their own right — a role's prose is a
+// `{{ section charter }}` in the profile now, not a separate file a slot
+// pulls in. KindBinding read bindings/*, which agent-setup retired
+// wholesale and cairn stopped accepting; launch configuration is the
+// launcher's, and lives in internal/launchprofile.
 type Kind string
 
 const (
 	// KindProfile is profiles/<id>.md or profiles/parts/<id>.md — the unit
 	// of composition. The subdirectory is organization, not another kind.
 	KindProfile Kind = "profile"
-	// KindRoleProse is templates/roles/<id>.md — prose a profile pulls in
-	// through its "role" slot. Not a profile.
-	KindRoleProse Kind = "role-prose"
-	// KindTemplate is templates/<id>.md — a document with cairn:slot and
-	// cairn:value markers. Top level only; roles/ is KindRoleProse.
+	// KindTemplate is templates/**/*.md — a document a profile pulls in,
+	// at any depth. The id carries the path below templates/ ("lenses/
+	// primary-source-first"), because that is what makes it addressable:
+	// agent-setup organizes templates into lenses/, projects/ and per-role
+	// directories, and a top-level-only reader saw 3 of its 13 files.
 	KindTemplate Kind = "template"
-	// KindPrompt is prompts/<id>.md — a flat file, simpler than a template
-	// in shape (no roles/-style subdirectory to exclude), that Cairn plants
-	// whole at .claude/commands/boot/<id>.md so a running session can invoke
-	// it as /boot:<id>. Per prompts/README.md in the live bundle, a prompt
-	// "is a template" in content terms — it may carry the same cairn:slot
-	// and cairn:value markers — but nothing here delivers it anywhere: this
-	// package only ever hands back its bytes for the manager's own
-	// open/save (see plan CW-20260904-0006, "there is no delivery work").
+	// KindPrompt is prompts/<id>.md — a flat file that Cairn plants whole at
+	// .claude/commands/boot/<id>.md so a running session can invoke it as
+	// /boot:<id>. Nothing here delivers it anywhere: this package only ever
+	// hands back its bytes for the manager's own open/save (see plan
+	// CW-20260904-0006, "there is no delivery work").
 	KindPrompt Kind = "prompt"
 	// KindSkill is skills/<id>/SKILL.md — one directory per skill.
 	KindSkill Kind = "skill"
 	// KindHook is hooks/<id>.sh — referenced in place by settings, edited as
 	// text.
 	KindHook Kind = "hook"
-	// KindBinding is bindings/<id> — a saved composition. The per-file format
-	// is not pinned by Cairn and this package does not interpret it.
-	KindBinding Kind = "binding"
 )
 
-// Kinds returns the seven artifact kinds, in a stable order suitable for
+// Kinds returns the five artifact kinds, in a stable order suitable for
 // grouping a tree. The order is presentational and carries no semantics.
 func Kinds() []Kind {
-	return []Kind{KindProfile, KindRoleProse, KindTemplate, KindPrompt, KindSkill, KindHook, KindBinding}
+	return []Kind{KindProfile, KindTemplate, KindPrompt, KindSkill, KindHook}
 }
 
 // Artifact ids. Each kind has its own id type so that the compiler rejects a
-// role prose id where a profile id is wanted, and vice versa. The eight role
-// prose files all share a basename with a profile, so this separation is what
-// keeps "the architect role" from being ambiguous.
+// template id where a profile id is wanted, and vice versa.
 type (
 	// ProfileID is the basename of a profiles/*.md or immediate
 	// profiles/parts/*.md file, without ".md".
 	ProfileID string
-	// RoleProseID is the basename of a templates/roles/*.md file, without
-	// ".md". It is not a ProfileID even when it spells the same word.
-	RoleProseID string
-	// TemplateID is the basename of a templates/*.md file, without ".md".
+	// TemplateID is a templates/**/*.md file's path below templates/,
+	// without ".md" and always slash-separated: "claude",
+	// "lenses/primary-source-first", "projects/cairn".
 	TemplateID string
 	// PromptID is the basename of a prompts/*.md file, without ".md".
 	PromptID string
@@ -61,14 +59,11 @@ type (
 	SkillID string
 	// HookID is the basename of a hooks/*.sh file, without ".sh".
 	HookID string
-	// BindingID is the basename of a file under bindings/, extension included,
-	// because the format is not pinned and the extension is part of the name.
-	BindingID string
 )
 
 // Ref addresses one artifact by kind and id. It is the handle a UI passes back
 // to [Bundle.Read]. Because Kind is part of it, Ref{KindProfile, "architect"}
-// and Ref{KindRoleProse, "architect"} are different refs.
+// and Ref{KindPrompt, "architect"} are different refs.
 type Ref struct {
 	Kind Kind
 	ID   string
@@ -91,21 +86,8 @@ type Profile struct {
 // Ref returns the profile's handle.
 func (p Profile) Ref() Ref { return Ref{Kind: KindProfile, ID: string(p.ID)} }
 
-// RoleProse is templates/roles/<id>.md — the prose behind a profile's "role"
-// slot. It is a separate type from [Profile] on purpose; see the package doc.
-type RoleProse struct {
-	// Role is the file's basename without ".md".
-	Role    RoleProseID
-	Path    string
-	RelPath string
-}
-
-// Ref returns the role prose file's handle.
-func (r RoleProse) Ref() Ref { return Ref{Kind: KindRoleProse, ID: string(r.Role)} }
-
-// Template is templates/<id>.md — a document carrying cairn:slot and
-// cairn:value markers. Marker positions are the only ordering in the bundle
-// that means anything, and they live in the bytes, not here.
+// Template is templates/**/*.md — a document a profile pulls in through
+// `{{ file: ... }}`, at any depth below templates/.
 type Template struct {
 	ID      TemplateID
 	Path    string
@@ -162,35 +144,14 @@ type Hook struct {
 // Ref returns the hook's handle.
 func (h Hook) Ref() Ref { return Ref{Kind: KindHook, ID: string(h.Name)} }
 
-// Binding is one file under bindings/ — a saved composition.
-//
-// This type carries no fields derived from a binding's contents on purpose:
-// internal/binding is the package that actually reads a binding's
-// profile/scope and resolves its scope alias, deliberately kept separate
-// from this package's plain, format-blind directory listing (see that
-// package's own doc for why). A missing bindings/ directory still
-// enumerates here as empty, not as an error — see this package's own doc,
-// "a missing artifact directory enumerates as empty."
-type Binding struct {
-	// Name is the file's basename, extension included.
-	Name    BindingID
-	Path    string
-	RelPath string
-}
-
-// Ref returns the binding's handle.
-func (b Binding) Ref() Ref { return Ref{Kind: KindBinding, ID: string(b.Name)} }
-
 // Contents is one enumeration of the whole bundle, grouped by kind.
 //
 // Every field is non-nil after a successful [Bundle.Contents], and empty for a
 // kind whose directory is absent.
 type Contents struct {
 	Profiles  []Profile
-	RoleProse []RoleProse
 	Templates []Template
 	Prompts   []Prompt
 	Skills    []Skill
 	Hooks     []Hook
-	Bindings  []Binding
 }

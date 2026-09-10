@@ -12,98 +12,75 @@ import (
 )
 
 // cairnMarkerPattern is a verbatim copy of markerPattern from
-// github.com/chrispian/cairn/bootdir/template.go, confirmed against that
-// file directly while this scaffold was written (2026-09-03):
+// github.com/chrispian/cairn/bootdir/template.go, the RETIRED marker
+// engine's own pattern:
 //
 //	var markerPattern = regexp.MustCompile(`<!--\s*cairn:(.*?)-->`)
 //
+// It is kept as a negative guard rather than deleted. Three tests here used
+// to assert the template scaffold placed exactly two markers, in both line
+// forms, naming six instance facts. agent-setup moved off that engine on
+// 2026-09-10 -- profiles became templates in their own right, with
+// `{{ extends }}` / `{{ section }}` / `{{ yield }}` in the profile and
+// `{{ file: ... }}` naming a template -- so a scaffold placing a marker now
+// hands someone a document the live bundle has no reader for.
+//
 // Tachyon has no dependency on Cairn (D3, and the plan's "zero Cairn
-// dependency" fence) so this cannot import it; it is copied here as a
-// regression guard so this package's own scaffold can be checked against the
-// exact rule that governs it in production, not against this package's own
-// possibly-wrong idea of that rule.
+// dependency" fence), so this is copied rather than imported.
 var cairnMarkerPattern = regexp.MustCompile(`<!--\s*cairn:(.*?)-->`)
 
-// TestTemplateScaffoldMarkersMatchCairnExactly proves two things at once
-// about the template scaffold's big explanatory HTML comment: that it
-// documents markers without becoming one (the comment mentions "cairn:slot"
-// and "cairn:value" in prose, and a naive marker scanner could misfire on
-// that), and that the two markers it actually places afterward — the slot
-// example and the value example — are the only two things cairn's own
-// pattern would find.
-func TestTemplateScaffoldMarkersMatchCairnExactly(t *testing.T) {
-	root := t.TempDir()
-	if _, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindTemplate, ID: "markertest"}); err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	content := readFile(t, root, "templates", "markertest.md")
-
-	matches := cairnMarkerPattern.FindAllString(content, -1)
-	want := []string{"<!-- cairn:slot example -->", "<!-- cairn:value scope -->"}
-	if len(matches) != len(want) {
-		t.Fatalf("cairn's marker pattern found %d markers in the scaffold, want %d: %v", len(matches), len(want), matches)
-	}
-	for i, m := range matches {
-		if m != want[i] {
-			t.Errorf("marker %d = %q; want %q", i, m, want[i])
-		}
-	}
-}
-
-// TestTemplateScaffoldShowsBothMarkerLineForms confirms the scaffold
-// literally shows both forms CW-20260903-0010 requires: a slot marker alone
-// on its own line (which vanishes entirely, newline included, if the slot is
-// never filled) and a value marker sharing its line with other content
-// (which keeps the line, per templates/agents.md's own
-// "- scope: <!-- cairn:value scope -->").
-func TestTemplateScaffoldShowsBothMarkerLineForms(t *testing.T) {
-	root := t.TempDir()
-	if _, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindTemplate, ID: "linerules"}); err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	content := readFile(t, root, "templates", "linerules.md")
-
-	lines := strings.Split(content, "\n")
-	sawAloneMarker := false
-	sawSharedLineMarker := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "<!-- cairn:slot example -->" {
-			sawAloneMarker = true
-		}
-		if strings.HasPrefix(trimmed, "-") && strings.Contains(line, "<!-- cairn:value scope -->") && trimmed != "<!-- cairn:value scope -->" {
-			sawSharedLineMarker = true
-		}
-	}
-	if !sawAloneMarker {
-		t.Error("no line has a cairn:slot marker alone on it")
-	}
-	if !sawSharedLineMarker {
-		t.Error("no line shares a cairn:value marker with other content")
-	}
-	if !strings.Contains(content, "- scope: <!-- cairn:value scope -->") {
-		t.Error(`scaffold does not contain the exact "- scope: <!-- cairn:value scope -->" example the task requires verbatim`)
+// TestScaffoldsPlaceNoRetiredMarkers is the negative form of the three
+// marker tests it replaced: no scaffold, for any kind, may emit something
+// cairn's old marker pattern would match.
+func TestScaffoldsPlaceNoRetiredMarkers(t *testing.T) {
+	for _, kind := range skeleton.SupportedKinds() {
+		kind := kind
+		t.Run(string(kind), func(t *testing.T) {
+			root := t.TempDir()
+			if _, err := skeleton.New(root, skeleton.Spec{Kind: kind, ID: "markertest"}); err != nil {
+				t.Fatalf("New(%s): %v", kind, err)
+			}
+			var found []string
+			err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || entry.IsDir() {
+					return err
+				}
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return readErr
+				}
+				found = append(found, cairnMarkerPattern.FindAllString(string(data), -1)...)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("walking the generated tree: %v", err)
+			}
+			if len(found) > 0 {
+				t.Errorf("the %s scaffold places retired cairn markers: %v", kind, found)
+			}
+		})
 	}
 }
 
-// TestTemplateScaffoldNamesAllSixInstanceFacts pins the six names
-// individually, in the order cairn's ValueNames() returns them, so a future
-// edit that drops or misorders one fails loudly here rather than only being
-// noticed by a human rereading the comment.
-func TestTemplateScaffoldNamesAllSixInstanceFacts(t *testing.T) {
+// TestTemplateScaffoldPointsAtTheEngineThatIsRunning is the positive half:
+// the scaffold has to say where the directives actually live, or someone
+// writes a template full of syntax that renders verbatim.
+func TestTemplateScaffoldPointsAtTheEngineThatIsRunning(t *testing.T) {
 	root := t.TempDir()
-	if _, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindTemplate, ID: "sixnames"}); err != nil {
+	if _, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindTemplate, ID: "engine"}); err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	content := readFile(t, root, "templates", "sixnames.md")
-	want := []string{"binding", "model", "profile", "provider", "scope", "session"}
-	for _, name := range want {
-		if !strings.Contains(content, name) {
-			t.Errorf("template scaffold does not mention instance fact %q", name)
+	content := readFile(t, root, "templates", "engine.md")
+
+	for _, want := range []string{"{{ section", "{{ file:", "{{ end }}", "profiles/base.md"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("template scaffold does not mention %q:\n%s", want, content)
 		}
 	}
-	if !strings.Contains(content, strings.Join(want, ", ")) {
-		t.Errorf("template scaffold does not list the six instance facts together, in cairn's own ValueNames() order")
+	// And it must say a subdirectory is allowed, since that is the whole
+	// reason a template id carries a path.
+	if !strings.Contains(content, "Subdirectories") {
+		t.Errorf("template scaffold does not mention that subdirectories are allowed:\n%s", content)
 	}
 }
 

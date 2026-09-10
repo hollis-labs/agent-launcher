@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { Binding, Launch, Manager, Project, Shell } from "./bridge.js";
+import { Launch, LaunchProfile, Manager, Project, Shell } from "./bridge.js";
 import { acceptTopSuggestion } from "./autocomplete.js";
 import EffectiveSkills from "./EffectiveSkills.jsx";
 import {
@@ -8,36 +8,37 @@ import {
   createCompositionDraft,
 } from "./compositionDraft.js";
 
-// The providers Cairn renders a boot directory for. Suggestions only:
-// this is a datalist and not a restricted dropdown because Cairn owns
-// provider validation and distinguishes "a provider cairn cannot render
-// yet" from "not a provider at all" — two refusals a restricted control
-// would collapse into one. Drift here costs an autocomplete entry,
-// never a refused launch. (D8; the literal tag name is spelled out
-// nowhere in this file because TestPaletteBindinglessCompositionContract
-// greps the whole source for it.)
-const PROVIDER_SUGGESTIONS = Object.freeze(["claude", "codex"]);
-
-// The palette lists the active bundle's bindings, filterable by name, and
-// lets the user move a selection over them with the mouse or the arrow
-// keys. The compose form has two explicit target modes: additions layered
-// over the highlighted binding (CW-20260903-0017), or a one-time launch
-// starting from a bare profile with no binding selected at all
-// (CW-20260904-0029). Enter (from the search box, or from an empty compose
-// field -- see attemptLaunch and each field's own onKeyDown) resolves that
-// target plus whatever has been composed through
-// internal/launch.Service.LaunchComposition -- runs `cairn boot` for it
-// and spawns iTerm2 on the result (CW-20260903-0016) -- and dismisses the
-// palette on success; a launch failure is shown inline instead, and the
-// palette stays open so the user can try again. Escape dismisses the
-// window at the native layer (paletteOptions' HideOnEscape, internal/shell)
-// without this component doing anything at all -- nothing here calls
-// Launch.* in response to Escape, so a compose-in-progress is safe to
-// abandon that way.
+// The palette launches an agent. Three things make one, and they come from
+// three places:
 //
-// Binding authoring now exists in the manager (CW-20260904-0028), and only
-// there. This window composes and launches; it never persists a composition
-// as a binding of its own.
+//   agent profile    the bundle          WHAT this is    the list below
+//   launch profile   ~/.config/tachyon   HOW it runs     the top selector
+//   project          Tachyon's own list  WHERE it works  the top selector
+//
+// All three are visible at once so the common launch is Enter on a row, and
+// the compose modal is for one-off additions on top rather than for the
+// basics. That split is the 2026-09-10 ruling (Tesseract
+// cairn_is_a_template_engine_not_an_authority): agent-setup owns content
+// and declares no runtime, cairn materializes a directory, the launcher owns
+// everything about a launch.
+//
+// It used to list BINDINGS — a saved (profile, parts, skills, scope) tuple
+// living in the bundle, in a format cairn could not read. agent-setup retired
+// all 34 and cairn dropped bindings and --save-as, so what replaced them is
+// not a smaller binding: it is the same facts, each owned by whoever knows
+// it. See internal/launchprofile.
+//
+// # There is no provider control, and that is the point
+//
+// A provider used to be a free-text field rendering --provider. No profile in
+// agent-setup declares a provider now and cairn refuses to render without
+// one, so the provider is declared in the launch profile and folded in by
+// cairn's own cascade. A control here would be a second source for a value a
+// file already carries, and the two could disagree.
+//
+// The consequence is worth stating: a launch with no launch profile selected
+// has no provider, and cairn refuses it. That is the intended shape rather
+// than a gap — internal/launchprofile seeds a default so a first run has one.
 //
 // # THE CORRECTNESS PROPERTY: skills (and prompts) are additive only, never
 // inherited
@@ -46,63 +47,66 @@ const PROVIDER_SUGGESTIONS = Object.freeze(["claude", "codex"]);
 // typed, starting empty with every new draft and growing ONLY through
 // ADD_SKILLS/REMOVE_SKILL, both dispatched only by direct user actions (the
 // skills draft input's Enter, and a chip's own remove button). Nothing in
-// this file seeds skills from a binding, a profile, or any other data this
-// window reads -- and there would be nothing to seed it from even if
-// something tried: the ListResult Binding.List() resolves to
-// carries only { name, profile, scope } per binding (internal/binding.Binding
-// has no skills field at all -- see internal/launch's own package doc and
-// TestBindingCarriesNoSkillsFieldToSeedFrom). Cairn's own --skill flag is
-// additive only (nothing in cairn removes a member of a collection keyed
+// this file seeds skills from a profile, a launch profile, or any other data
+// this window reads — and there would be nothing to seed it from even if
+// something tried: launchprofile.Profile carries only
+// { name, path, provider, description }, with no skills field at all (see
+// internal/launch's own package doc and
+// TestLaunchProfileCarriesNoSkillsFieldToSeedFrom). Cairn's own --skill flag
+// is additive only (nothing in cairn removes a member of a collection keyed
 // by its own id), so a control that looked pre-checked with a profile's
 // existing skills would let a person "uncheck" one and silently get it
-// anyway -- a wrong result that looks right. The label on the skills field
+// anyway — a wrong result that looks right. The label on the skills field
 // below says "Add skills for this launch" for exactly this reason: it is
 // never a picture of what the target already has.
 //
-// `prompts` (CW-20260904-0006) is built the identical way, through
-// ADD_PROMPTS/REMOVE_PROMPT only, for the identical reason: Cairn's own
-// --prompt flag documents itself as "Additive only, for the reason --skill
-// is", and internal/binding.Binding has no prompts field either -- see
-// TestBindingCarriesNoPromptsFieldToSeedFrom. The prompts field's label
+// `prompts` is built the identical way, through ADD_PROMPTS/REMOVE_PROMPT
+// only, for the identical reason: cairn's own --prompt flag documents itself
+// as "Additive only, for the reason --skill is". The prompts field's label
 // says "Add prompts for this launch" to match.
 //
 // # Three empty states, not one (CW-20260904-0002 / T23)
 //
-// Binding.List() resolves to a [ListResult]-shaped object — see
-// internal/binding.Service.List's own doc — not a bare array:
-// { bindings, state, path, detail }, state one of "ok" | "missing" |
-// "unreadable". Before T23, an empty bundle, a wrong bundle root, and a
-// bundle whose bindings could not be read all rendered the same
-// unconditional "No bindings yet" — the exact falsely-reassuring copy that
-// had Chrispian asking whether he was *supposed* to have bindings when the
-// real answer was "this build can't read them." listResult below carries
-// enough for renderBody to tell all three apart and say which one is
-// actually true, naming the bundle path in the two states that are real
-// problems rather than a genuinely empty bundle.
+// LaunchProfile.List() resolves to a ListResult-shaped object — see
+// internal/launchprofile.Service.List's own doc — not a bare array:
+// { profiles, state, path, detail }, state one of "ok" | "missing" |
+// "unreadable". Before T23, an empty store, a wrong root, and a store that
+// could not be read all rendered the same unconditional sentence — the exact
+// falsely-reassuring copy that had Chrispian asking whether he was *supposed*
+// to have bindings when the real answer was "this build can't read them."
+//
+// One of the three is now genuinely the common state: a fresh machine has
+// written no launch profile. So "missing" invites rather than alarms, and
+// the two that are real problems name the path.
 export default function Palette() {
   // null = still loading. Once settled, either the resolved ListResult
-  // ({ bindings, state, path, detail }) or a synthetic { state: "error" }
-  // for the one case that isn't one of the three documented states: the
-  // active bundle root itself could not even be resolved (Binding.List()
-  // rejects rather than resolving — see internal/binding.Service.List's
-  // doc on when it returns a non-nil error instead of State).
-  const [listResult, setListResult] = useState(null);
+  // ({ profiles, state, path, detail }) or a synthetic { state: "error" }
+  // for the one case that isn't one of the three documented states.
+  const [launchProfiles, setLaunchProfiles] = useState(null);
+  const [targets, setTargets] = useState(null);
+  const [targetsError, setTargetsError] = useState("");
   const [directLaunchError, setDirectLaunchError] = useState("");
   const [directLaunching, setDirectLaunching] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+
+  // The two axes that are not the target. They live outside the compose
+  // draft on purpose: a draft is one launch, and these persist across
+  // launches the way a person's working context does. A new draft opens on
+  // whatever is selected here.
+  const [launchProfile, setLaunchProfile] = useState("");
+  const [projectPath, setProjectPath] = useState("");
+
   const inputRef = useRef(null);
   const baseProfileRef = useRef(null);
   const partDraftRef = useRef(null);
 
-  // The palette reads suggestion values from the same active bundle tree
-  // the manager shows and the same Tachyon Projects registry the manager
-  // edits. They are hints only: every control below remains an ordinary
-  // text input, so a value that is not in either source still flows to
-  // Cairn unchanged (D8). Loading is deliberately independent from
-  // Binding.List(): composing from a bare profile is most useful when the
-  // bundle has no bindings at all, and a missing/unreadable bindings/
-  // directory must not take this entry point down with it.
+  // Suggestion sources for the compose modal's free-text controls. They are
+  // hints only: every control there remains an ordinary text input, so a
+  // value in neither source still flows to cairn unchanged (D8). Loading is
+  // deliberately independent of the two lists above — a bundle that cannot
+  // be read must not take the launch-profile picker down with it, or the
+  // reverse.
   const [catalogTree, setCatalogTree] = useState(null);
   const [projects, setProjects] = useState([]);
   const [suggestionErrors, setSuggestionErrors] = useState({});
@@ -124,7 +128,7 @@ export default function Palette() {
     skillDraft,
     prompts,
     promptDraft,
-    provider,
+    launchProfile: composeLaunchProfile,
     scope,
     parts,
     partDraft,
@@ -137,8 +141,7 @@ export default function Palette() {
     targetDraft: baseProfile,
     launchError,
   } = composition;
-  const bindingless = composition.mode === "profile";
-  const composeBinding = composition.mode === "binding" ? composeTarget : "";
+  const typedTarget = composition.mode === "typed";
   const launching = directLaunching || composition.launching;
 
   const updateCompositionField = (field, value) => {
@@ -147,7 +150,7 @@ export default function Palette() {
   const setBaseProfile = (value) => dispatchComposition({ type: "SET_TARGET_DRAFT", value });
   const setSkillDraft = (value) => updateCompositionField("skillDraft", value);
   const setPromptDraft = (value) => updateCompositionField("promptDraft", value);
-  const setProvider = (value) => updateCompositionField("provider", value);
+  const setComposeLaunchProfile = (value) => updateCompositionField("launchProfile", value);
   const setScope = (value) => updateCompositionField("scope", value);
   const setPartDraft = (value) => updateCompositionField("partDraft", value);
   const setSetSlotDraft = (value) => updateCompositionField("setSlotDraft", value);
@@ -204,14 +207,31 @@ export default function Palette() {
     let requestId = 0;
     const load = () => {
       const myRequestId = ++requestId;
-      Binding.List()
-        .then((result) => {
+
+      // The two lists settle independently, because they come from two
+      // stores that fail for unrelated reasons: the bundle can be missing
+      // while the launch store is fine, and the reverse. Neither failure is
+      // a reason to take the other list down.
+      Launch.Targets()
+        .then((list) => {
           if (cancelled || myRequestId !== requestId) return;
-          setListResult(result ?? { bindings: [], state: "ok", path: "" });
+          setTargets(list ?? []);
+          setTargetsError("");
         })
         .catch((err) => {
           if (cancelled || myRequestId !== requestId) return;
-          setListResult({ state: "error", detail: String(err?.message ?? err) });
+          setTargets([]);
+          setTargetsError(String(err?.message ?? err));
+        });
+
+      LaunchProfile.List()
+        .then((result) => {
+          if (cancelled || myRequestId !== requestId) return;
+          setLaunchProfiles(result ?? { profiles: [], state: "ok", path: "" });
+        })
+        .catch((err) => {
+          if (cancelled || myRequestId !== requestId) return;
+          setLaunchProfiles({ state: "error", detail: String(err?.message ?? err) });
         });
     };
     load();
@@ -232,13 +252,29 @@ export default function Palette() {
     };
   }, []);
 
-  const bindings = listResult?.state === "ok" ? listResult.bindings ?? [] : [];
+  const profiles = launchProfiles?.state === "ok" ? launchProfiles.profiles ?? [] : [];
+  const targetList = targets ?? [];
+
+  // Keep the selected launch profile pointing at something real. On first
+  // load nothing is selected, so prefer one literally named "default" (the
+  // seed) and otherwise take the first — a palette that opened with no
+  // launch profile selected would refuse every launch for want of a
+  // provider, which is a true diagnostic and a useless first impression.
+  useEffect(() => {
+    if (profiles.length === 0) return;
+    if (profiles.some((p) => p.name === launchProfile)) return;
+    setLaunchProfile((profiles.find((p) => p.name === "default") ?? profiles[0]).name);
+  }, [profiles, launchProfile]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return bindings;
-    return bindings.filter((b) => b.name.toLowerCase().includes(q));
-  }, [bindings, query]);
+    if (!q) return targetList;
+    // Description too, not just the id: the roles are told apart by what
+    // they do far more readably than by their names.
+    return targetList.filter((t) =>
+      [t.id, t.name, t.description].some((field) => (field ?? "").toLowerCase().includes(q)),
+    );
+  }, [targetList, query]);
 
   // The active row must stay in range as filtering shrinks or reorders the
   // list — an index left pointing past the end, or at a row that scrolled
@@ -260,6 +296,38 @@ export default function Palette() {
     name: view.project.name,
     path: view.project.path,
   }));
+
+  // The palette puts the caret in the search box on every summon, so a
+  // person can type immediately without clicking first.
+  //
+  // This window is created at app start and never unmounted: the hotkey and
+  // the tray Show()/Hide() it. So React mounts ONCE, while the window is
+  // hidden, and the search box's autoFocus fires there — into a window
+  // nobody is looking at. Show() + Focus() fires a real "focus" DOM event on
+  // this window's top-level browsing context every summon, the same event the
+  // two load effects already use to re-read their lists, so that is where
+  // this belongs too.
+  //
+  // It is a convenience and NOT what makes the keyboard work: the arrows and
+  // Enter are bound to the window (see paletteKeyDown), precisely so they do
+  // not depend on any one element holding focus.
+  //
+  // It defers to an open compose modal. A retained draft survives dismissal
+  // (see the blur listener below), so a summon that lands back in an open
+  // modal must not yank focus out of whatever field the person was typing
+  // in and back to the search box.
+  const composeOpenRef = useRef(false);
+  composeOpenRef.current = composeOpen;
+  useEffect(() => {
+    const focusSearch = () => {
+      if (composeOpenRef.current) return;
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    focusSearch();
+    window.addEventListener("focus", focusSearch);
+    return () => window.removeEventListener("focus", focusSearch);
+  }, []);
 
   // Escape, click-away, the global hotkey, and native focus loss all hide
   // this Wails window rather than unmounting it. A window blur therefore
@@ -283,9 +351,9 @@ export default function Palette() {
   // person did not ask for.
   function attemptLaunch() {
     if (launching || activeCompositionLaunchRef.current !== null) return;
-    if (bindingless && !composeTarget) {
+    if (typedTarget && !composeTarget) {
       if (!baseProfile.trim()) return;
-      dispatchComposition({ type: "CAPTURE_PROFILE" });
+      dispatchComposition({ type: "CAPTURE_TARGET" });
       requestAnimationFrame(() => partDraftRef.current?.focus());
       return;
     }
@@ -323,34 +391,50 @@ export default function Palette() {
       });
   }
 
-  // A double-click is the fastest path through the palette and is kept
-  // deliberately separate from composition: it launches the saved binding
-  // by name through Launch.Binding and therefore cannot accidentally carry
-  // a stale part, skill, prompt, scope, or set from the modal draft.
-  function launchBinding(name) {
-    if (launching || !name) return;
+  // Enter, or a double-click, is the fastest path through the palette: the
+  // three axes are already chosen — the highlighted row, and the two
+  // selectors above the list — so there is nothing left to fill in.
+  //
+  // It goes through Launch.Composition like everything else, carrying only
+  // those three and nothing from the modal draft, so a direct launch can
+  // never pick up a stale part, skill, prompt or set someone left open.
+  function launchTarget(id) {
+    if (launching || !id) return;
     setDirectLaunchError("");
     setDirectLaunching(true);
-    Launch.Binding(name)
-      .then(() => {
-        return Shell.HidePalette();
-      })
+    Launch.Composition({
+      target: id,
+      launchProfile,
+      scope: projectPath,
+      skills: [],
+      prompts: [],
+      sets: [],
+      parts: [],
+    })
+      .then(() => Shell.HidePalette())
       .catch((err) => setDirectLaunchError(String(err?.message ?? err)))
       .finally(() => setDirectLaunching(false));
   }
 
-  function openBindingComposition(index, name) {
+  // A new draft opens on whatever the two selectors say, so the modal is
+  // for ADDITIONS rather than for re-entering the basics. Skills and
+  // prompts are never seeded — see this file's header comment, and
+  // compositionDraft.js's newDraft.
+  const draftDefaults = () => ({ launchProfile, scope: projectPath });
+
+  function openComposition(index, id) {
     setActiveIndex(index);
     setDirectLaunchError("");
-    dispatchComposition({ type: "OPEN_BINDING", target: name });
+    dispatchComposition({ type: "OPEN_TARGET", target: id, defaults: draftDefaults() });
     requestAnimationFrame(() => partDraftRef.current?.focus());
   }
 
-  // This is a NEW draft, per T33. The state machine refuses to replace an
-  // already-open draft; switching modes therefore requires Discard & close.
-  function openBindinglessComposition() {
+  // A composition whose target is typed rather than picked. The state
+  // machine refuses to replace an already-open draft; switching therefore
+  // requires Discard & close.
+  function openBlankComposition() {
     setDirectLaunchError("");
-    dispatchComposition({ type: "OPEN_PROFILE" });
+    dispatchComposition({ type: "OPEN_BLANK", defaults: draftDefaults() });
     requestAnimationFrame(() => baseProfileRef.current?.focus());
   }
 
@@ -362,7 +446,7 @@ export default function Palette() {
 
   function clearComposition() {
     dispatchComposition({ type: "CLEAR" });
-    requestAnimationFrame(() => (bindingless && !composeTarget ? baseProfileRef : partDraftRef).current?.focus());
+    requestAnimationFrame(() => (typedTarget && !composeTarget ? baseProfileRef : partDraftRef).current?.focus());
   }
 
   // addSkills splits raw on commas (--skill's own "comma-separated and
@@ -420,7 +504,25 @@ export default function Palette() {
     dispatchComposition({ type: "REMOVE_SET", index });
   }
 
-  function onSearchKeyDown(e) {
+  // paletteKeyDown is the palette's keyboard, and it is bound to the WINDOW
+  // rather than to the search input.
+  //
+  // It used to be the input's own onKeyDown, and that made the primary action
+  // depend on one element holding focus. On macOS, clicking a <button> does
+  // not focus it — the platform convention — so a single click anywhere in
+  // this window moves focus off the input and onto BODY, and from that moment
+  // Enter reached nothing at all. Measured, not theorised: the palette's own
+  // diagnostic logged activeElement=BODY straight after a click, with arrow
+  // and Enter handlers never firing again.
+  //
+  // Summoning-focus alone does not fix that. It restores focus once per
+  // summon, and the very next click takes it away again.
+  //
+  // The compose modal owns its own keys — every field there has an Enter
+  // handler that either commits pending text or launches — so this defers
+  // entirely while it is open rather than racing it.
+  function paletteKeyDown(e) {
+    if (composeOpenRef.current) return;
     if (e.key === "ArrowDown") {
       if (filtered.length === 0) return;
       e.preventDefault();
@@ -431,9 +533,19 @@ export default function Palette() {
       setActiveIndex((i) => (i - 1 + filtered.length) % filtered.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      launchBinding(activeTarget?.name);
+      launchTarget(activeTarget?.id);
     }
   }
+
+  // Bound with no dependency array on purpose: the handler closes over
+  // filtered/activeIndex/launchProfile/projectPath, and a listener registered
+  // once at mount would keep launching whatever the FIRST render happened to
+  // have highlighted. Re-subscribing each render costs one add/remove pair
+  // and keeps the closure honest.
+  useEffect(() => {
+    window.addEventListener("keydown", paletteKeyDown);
+    return () => window.removeEventListener("keydown", paletteKeyDown);
+  });
 
   // onDraftEnter is the shared shape for every compose field's own Enter
   // key: if there is pending text, commit() it and stop there (never
@@ -452,7 +564,7 @@ export default function Palette() {
     <div className="palette-shell">
       <input
         ref={inputRef}
-        placeholder="Search bindings…"
+        placeholder="Search agents…"
         autoFocus
         spellCheck={false}
         value={query}
@@ -460,13 +572,60 @@ export default function Palette() {
           setQuery(e.target.value);
           setDirectLaunchError("");
         }}
-        onKeyDown={onSearchKeyDown}
       />
 
+      {/* The two axes that are not the target, side by side above the list.
+          Both are restricted selects rather than free text, and for
+          different reasons: a launch profile is a NAME the Go side resolves
+          against its own store (so nothing typed here can point cairn's
+          --with at an arbitrary file), and a project is a saved path Tachyon
+          already holds. Free text for either belongs in the compose modal,
+          which has it. */}
+      <div className="palette-axes">
+        <label className="palette-axis">
+          <span className="muted">How</span>
+          <select
+            value={launchProfile}
+            disabled={launching || profiles.length === 0}
+            onChange={(e) => {
+              setLaunchProfile(e.target.value);
+              setDirectLaunchError("");
+            }}
+          >
+            {profiles.length === 0 ? <option value="">no launch profiles</option> : null}
+            {profiles.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}{p.provider ? ` · ${p.provider}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="palette-axis">
+          <span className="muted">Where</span>
+          <select
+            value={projectPath}
+            disabled={launching}
+            onChange={(e) => {
+              setProjectPath(e.target.value);
+              setDirectLaunchError("");
+            }}
+          >
+            {/* No project is a real choice, not a missing one: cairn accepts
+                a boot with no --scope, which is right for a profile like
+                conductor that holds no scope of its own. */}
+            <option value="">no project</option>
+            {projectSuggestions.map((project) => (
+              <option key={project.name} value={project.path}>{project.name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
       <div className="palette-modebar">
-        <span className="muted">Double-click a binding to launch it directly</span>
-        <button type="button" onClick={openBindinglessComposition} disabled={launching}>
-          New one-time composition
+        <span className="muted">Enter or double-click to launch · Compose to add more</span>
+        <button type="button" onClick={openBlankComposition} disabled={launching}>
+          Type a target…
         </button>
       </div>
 
@@ -477,24 +636,26 @@ export default function Palette() {
       ) : null}
 
       <div className="palette-scroll">
-        {renderBody(
-          listResult,
+        {renderBody({
+          targets,
+          targetsError,
+          launchProfiles,
           filtered,
           activeIndex,
-          (index) => {
+          onSelect: (index) => {
             setActiveIndex(index);
             setDirectLaunchError("");
           },
-          setActiveIndex,
-          openBindingComposition,
-          launchBinding,
+          onHover: setActiveIndex,
+          onCompose: openComposition,
+          onLaunch: launchTarget,
           launching,
-        )}
+        })}
       </div>
 
-      {composeOpen && (bindingless || composeBinding) ? (
+      {composeOpen ? (
         <ComposeSection
-          bindingless={bindingless}
+          typedTarget={typedTarget}
           targetName={composeTarget}
           retained={composeRetained}
           baseProfile={baseProfile}
@@ -519,8 +680,9 @@ export default function Palette() {
           setPromptDraft={setPromptDraft}
           addPrompts={addPrompts}
           removePrompt={removePrompt}
-          provider={provider}
-          setProvider={setProvider}
+          launchProfile={composeLaunchProfile}
+          setLaunchProfile={setComposeLaunchProfile}
+          launchProfileOptions={profiles}
           scope={scope}
           setScope={setScope}
           parts={parts}
@@ -563,18 +725,20 @@ export default function Palette() {
   );
 }
 
-// ComposeSection is the compose form itself: a bare-profile target when T33
-// mode is active, followed by one control per Cairn flag (T08,
-// CW-20260903-0012; prompts added by CW-20260904-0006). It follows T32's
-// profile -> ordered parts -> additive skills/prompts -> sets -> provider
-// -> scope resolution stack. Parts can be reordered because each becomes
-// an ordered --with flag. Skills and prompts stay additive-only; their chip order is
-// insertion order, never an inherited selection. There is deliberately no
-// template control — template choice is authoring-time only (D4) and
-// contributes nothing to a composition.
+// ComposeSection is the compose form: a typed target when the draft has no
+// picked one, then one control per cairn flag, in the order cairn resolves
+// them — launch profile -> ordered parts -> additive skills/prompts -> sets
+// -> scope. Parts can be reordered because each becomes an ordered --with.
+// Skills and prompts stay additive-only; their chip order is insertion
+// order, never an inherited selection.
+//
+// There is deliberately no template control — template choice is
+// authoring-time only (D4) — and deliberately no PROVIDER control: it is
+// declared in the launch profile and folded in by cairn's cascade, so a
+// field here would be a second source for one value. See this file's header.
 function ComposeSection(props) {
   const {
-    bindingless,
+    typedTarget,
     targetName,
     retained,
     baseProfile,
@@ -599,8 +763,9 @@ function ComposeSection(props) {
     setPromptDraft,
     addPrompts,
     removePrompt,
-    provider,
-    setProvider,
+    launchProfile,
+    setLaunchProfile,
+    launchProfileOptions,
     scope,
     setScope,
     parts,
@@ -622,11 +787,6 @@ function ComposeSection(props) {
     clearComposition,
     discardComposition,
   } = props;
-
-  // Unlike every other suggestion list here, this one is not a census of the
-  // active bundle: it is the fixed pair Cairn renders a boot directory for.
-  // See PROVIDER_SUGGESTIONS above for why it stays a suggestion.
-  const providerSuggestions = PROVIDER_SUGGESTIONS;
 
   const modalRef = useRef(null);
   const trapModalTab = (event) => {
@@ -663,10 +823,10 @@ function ComposeSection(props) {
         <header className="compose-modal-header">
           <div>
             <div className="compose-heading" id="compose-modal-title">
-              {bindingless ? "One-time composition" : "Compose additions for"}
+              {typedTarget ? "One-time composition" : "Compose additions for"}
             </div>
             <div className="compose-modal-target">
-              {bindingless ? targetName || "Choose a base profile" : targetName}
+              {typedTarget ? targetName || "Choose an agent profile" : targetName}
             </div>
             {retained ? (
               <div className="compose-draft-retained" role="status">
@@ -684,10 +844,10 @@ function ComposeSection(props) {
 
           <div className="compose-section">
 
-      {bindingless && !targetName ? (
+      {typedTarget && !targetName ? (
         <div className="compose-field compose-base-profile">
           <label htmlFor="compose-profile-input">
-            Base profile to capture <span className="muted">(suggestions only — free text works)</span>
+            Agent profile to capture <span className="muted">(suggestions only — free text works)</span>
           </label>
           <input
             id="compose-profile-input"
@@ -925,47 +1085,47 @@ function ComposeSection(props) {
         ) : null}
       </div>
 
-      {/* Provider maps directly to --provider, and empty means the flag is
-          never sent at all — the resolved profile's own declaration decides,
-          which is the ordinary case. Free text with a datalist, never a
-          restricted dropdown: Cairn validates, and it refuses "a provider
-          cairn cannot render yet" and "not a provider at all" differently —
-          a restricted control would erase that distinction (D8). */}
+      {/* The launch profile: the file that says HOW this runs. It is a
+          restricted select, unlike every other control here, and the reason
+          is not taste — the Go side resolves a NAME against its own store,
+          which validates it before joining, so nothing sent from here can
+          point cairn's --with at an arbitrary file.
+
+          An empty one means no provider, which cairn refuses. That is the
+          intended shape rather than a gap; the option is offered so the
+          refusal is reachable deliberately rather than only by accident. */}
       <div className="compose-field">
-        <label htmlFor="compose-provider-input">
-          Provider (--provider) <span className="muted">(defaults to the profile's own — suggestions only, free text works)</span>
+        <label htmlFor="compose-launch-profile">
+          Launch profile <span className="muted">(the provider and posture — --with)</span>
         </label>
-        <input
-          id="compose-provider-input"
-          list="compose-provider-suggestions"
-          placeholder="profile default"
-          spellCheck={false}
-          value={provider}
-          onChange={(e) => setProvider(e.target.value)}
-          onKeyDown={(e) => {
-            if (acceptTopSuggestion(e, provider, providerSuggestions, setProvider)) return;
-            if (e.key === "Enter") {
-              e.preventDefault();
-              attemptLaunch();
-            }
-          }}
-        />
-        <datalist id="compose-provider-suggestions">
-          {providerSuggestions.map((name) => <option key={name} value={name} />)}
-        </datalist>
+        <select
+          id="compose-launch-profile"
+          value={launchProfile}
+          onChange={(e) => setLaunchProfile(e.target.value)}
+        >
+          <option value="">none — cairn will refuse this launch</option>
+          {(launchProfileOptions ?? []).map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}{p.provider ? ` · ${p.provider}` : ""}
+              {p.description ? ` — ${p.description}` : ""}
+            </option>
+          ))}
+        </select>
       </div>
 
-      {/* Scope maps directly to --scope. Project names never cross the
-          launch boundary: selecting one copies its literal saved path into
-          this ordinary free-text input, exactly like T32's composer. */}
+      {/* Scope maps directly to --scope, and is the ONLY source for one:
+          cairn refuses `scope:` as frontmatter, so a launch profile cannot
+          carry a scope and there is nothing here to override. Project names
+          never cross the launch boundary: selecting one copies its literal
+          saved path into this ordinary free-text input. */}
       <div className="compose-field">
         <label htmlFor="compose-scope-input">
-          Scope {bindingless ? "" : "override"}<span className="muted"> (literal path)</span>
+          Project scope<span className="muted"> (literal path — --scope)</span>
         </label>
         <input
           id="compose-scope-input"
           list="compose-project-suggestions"
-          placeholder={bindingless ? "project path (optional)" : "(leave empty to use the binding's own scope)"}
+          placeholder="project path (optional — no scope is a real choice)"
           spellCheck={false}
           value={scope}
           onChange={(e) => setScope(e.target.value)}
@@ -1000,13 +1160,13 @@ function ComposeSection(props) {
         </div>
 
         <footer className="compose-modal-footer">
-          <span className="muted">Launch only — this palette never writes a binding.</span>
+          <span className="muted">Launch only — save a launch profile from the manager.</span>
           <div className="compose-modal-actions">
             <button type="button" className="secondary" onClick={clearComposition} disabled={launching}>
               Clear
             </button>
             <button type="button" onClick={attemptLaunch} disabled={launching || (!targetName && !baseProfile.trim())}>
-              {launching ? "Launching…" : bindingless && !targetName ? "Use base profile" : "Launch composition"}
+              {launching ? "Launching…" : typedTarget && !targetName ? "Use this profile" : "Launch composition"}
             </button>
           </div>
         </footer>
@@ -1015,62 +1175,90 @@ function ComposeSection(props) {
   );
 }
 
-// renderBody picks one of the palette's states. listResult is null while
-// still loading; once settled it is either the real ListResult
-// ({ bindings, state: "ok"|"missing"|"unreadable", path, detail }) or the
-// synthetic { state: "error", detail } Palette sets when Binding.List()
-// itself rejected. Each non-"ok" state gets its own honest copy, per this
-// task's own acceptance table — none of them collapse into "No bindings
-// yet", which is reserved for the one state where that is actually true.
-function renderBody(listResult, filtered, activeIndex, onSelect, onHover, onCompose, onLaunch, launching) {
-  if (listResult === null) {
-    return <div className="placeholder muted">Loading bindings…</div>;
+// renderBody picks one of the palette's states.
+//
+// It reports on TWO stores, which is what the shape below is for. The agent
+// list comes from the bundle and the launch-profile list from Tachyon's own
+// directory; either can be empty or broken while the other is fine, and the
+// palette can launch nothing without both. A single "nothing here" would
+// leave a person guessing which one to go and fix.
+//
+// launchProfiles is null while loading; once settled it is the real
+// ListResult ({ profiles, state: "ok"|"missing"|"unreadable", path, detail })
+// or the synthetic { state: "error", detail } for a rejected call. Each
+// non-"ok" state gets its own honest copy — none collapse into "none yet",
+// which is reserved for the one state where that is actually true, and
+// which is now the ordinary first-run state rather than a fault.
+function renderBody({
+  targets,
+  targetsError,
+  launchProfiles,
+  filtered,
+  activeIndex,
+  onSelect,
+  onHover,
+  onCompose,
+  onLaunch,
+  launching,
+}) {
+  if (targets === null || launchProfiles === null) {
+    return <div className="placeholder muted">Loading…</div>;
   }
 
-  if (listResult.state === "error") {
+  // The bundle first: without an agent profile there is nothing to launch,
+  // whatever the launch store says.
+  if (targetsError) {
     return (
       <div className="placeholder">
         <div>
-          <div className="err">Couldn't load bindings</div>
-          <div className="muted" style={{ marginTop: 8 }}>{listResult.detail}</div>
+          <div className="err">Couldn't read the bundle</div>
+          <div className="muted" style={{ marginTop: 8 }}>{targetsError}</div>
         </div>
       </div>
     );
   }
 
-  if (listResult.state === "missing") {
+  const profileState = launchProfiles.state;
+  if (profileState === "error" || profileState === "unreadable") {
     return (
       <div className="placeholder">
         <div>
-          <div className="err">No bindings/ directory found</div>
+          <div className="err">Couldn't read your launch profiles</div>
           <div className="muted" style={{ marginTop: 8 }}>
-            Nothing exists at <code>{listResult.path}</code>. Check that this is the right
-            bundle, or that it's been set up with Cairn.
+            {launchProfiles.detail}
+            {launchProfiles.path ? <> · <code>{launchProfiles.path}</code></> : null}
           </div>
         </div>
       </div>
     );
   }
 
-  if (listResult.state === "unreadable") {
+  // "missing" is first run, not a fault, and the copy has to say so: the
+  // directory is created the moment one is written, and Tachyon seeds a
+  // default at startup, so seeing this means neither has happened yet.
+  if (profileState === "missing" || (launchProfiles.profiles ?? []).length === 0) {
     return (
       <div className="placeholder">
         <div>
-          <div className="err">Couldn't read bindings</div>
-          <div className="muted" style={{ marginTop: 8 }}>{listResult.detail}</div>
+          <div>No launch profiles yet</div>
+          <div className="muted" style={{ marginTop: 8 }}>
+            A launch profile says how an agent runs — which harness, which
+            settings. Nothing can launch without one, because no profile in
+            the bundle names a provider. Write one at{" "}
+            <code>{launchProfiles.path}</code>, or open the manager.
+          </div>
         </div>
       </div>
     );
   }
 
-  // state === "ok" from here down: a real, resolved bindings/ directory —
-  // possibly genuinely empty, which is the one case "No bindings yet" is
-  // actually true.
   if (filtered.length === 0) {
     return (
       <div className="placeholder">
         <div className="muted">
-          {(listResult.bindings ?? []).length === 0 ? "No bindings yet" : "No bindings match your search"}
+          {(targets ?? []).length === 0
+            ? "This bundle has no bootable agent profiles"
+            : "No agents match your search"}
         </div>
       </div>
     );
@@ -1078,8 +1266,8 @@ function renderBody(listResult, filtered, activeIndex, onSelect, onHover, onComp
 
   return (
     <ul className="palette-list" role="listbox">
-      {filtered.map((b, i) => (
-        <li key={b.name} className={"palette-row" + (i === activeIndex ? " active" : "")}>
+      {filtered.map((t, i) => (
+        <li key={t.id} className={"palette-row" + (i === activeIndex ? " active" : "")}>
           <button
             type="button"
             role="option"
@@ -1087,17 +1275,17 @@ function renderBody(listResult, filtered, activeIndex, onSelect, onHover, onComp
             className="palette-row-main"
             onMouseEnter={() => onHover(i)}
             onClick={() => onSelect(i)}
-            onDoubleClick={() => onLaunch(b.name)}
+            onDoubleClick={() => onLaunch(t.id)}
             disabled={launching}
           >
-            <span className="palette-row-name">{b.name}</span>
-            <span className="palette-row-profile">{b.profile}</span>
-            <span className="palette-row-scope">{b.scope}</span>
+            <span className="palette-row-name">{t.id}</span>
+            <span className="palette-row-profile">{t.name}</span>
+            <span className="palette-row-scope">{t.description}</span>
           </button>
           <button
             type="button"
             className="palette-row-compose"
-            onClick={() => onCompose(i, b.name)}
+            onClick={() => onCompose(i, t.id)}
             disabled={launching}
           >
             Compose

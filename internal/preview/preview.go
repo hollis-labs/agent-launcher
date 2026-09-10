@@ -15,13 +15,14 @@ import (
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/compose"
 	"github.com/hollis-labs/tachyon/internal/launch"
+	"github.com/hollis-labs/tachyon/internal/launchprofile"
+	"github.com/hollis-labs/tachyon/internal/state"
 )
 
-// CompositionInput is exactly the input used to launch a composition. A
-// saved-binding preview therefore targets the binding name and contains only
-// additions made in the modal; a profile composition targets that profile.
-// Cairn, rather than Tachyon, resolves saved binding members and inherited
-// profile state.
+// CompositionInput is exactly the input used to launch a composition —
+// the same type, not a copy of its shape, so a field added to a launch
+// cannot be forgotten here. Cairn, rather than Tachyon, resolves the launch
+// profile's own cascade and the target profile's inherited state.
 type CompositionInput = launch.CompositionInput
 
 // Result is the read-only subset of `cairn show --json` presented by Tachyon.
@@ -71,6 +72,10 @@ func (e *InvocationError) Unwrap() error { return e.Err }
 type Options struct {
 	CairnPath string
 	Runner    Runner
+
+	// LaunchDir overrides where launch profiles are resolved from. Empty
+	// means [state.LaunchDir].
+	LaunchDir string
 }
 
 // Service is the single preview service shared by the palette and Manager.
@@ -78,10 +83,46 @@ type Service struct {
 	store     bundle.RootStore
 	cairnPath string
 	runner    Runner
+	launchDir string
 }
 
 func NewService(store bundle.RootStore, options Options) *Service {
-	return &Service{store: store, cairnPath: options.CairnPath, runner: options.Runner}
+	return &Service{
+		store:     store,
+		cairnPath: options.CairnPath,
+		runner:    options.Runner,
+		launchDir: options.LaunchDir,
+	}
+}
+
+// launchProfilePath resolves the input's launch profile to a path, or ""
+// when it names none.
+//
+// A preview MUST resolve it the same way a launch does. The launch profile
+// is what declares the provider, and `cairn show` reports a different
+// resolved skill set per provider — so a preview that skipped it would show
+// the wrong answer for the launch it is previewing, which is the one thing
+// a preview must never do.
+//
+// A name that does not resolve is an error rather than a silently dropped
+// part, for the same reason: the preview would be of a composition nobody
+// is about to run.
+func (s *Service) launchProfilePath(name string) (string, error) {
+	if name == "" {
+		return "", nil
+	}
+	dir := s.launchDir
+	if dir == "" {
+		var err error
+		if dir, err = state.LaunchDir(); err != nil {
+			return "", fmt.Errorf("preview: %w", err)
+		}
+	}
+	p, err := launchprofile.Open(dir).Get(name)
+	if err != nil {
+		return "", fmt.Errorf("preview: resolving launch profile %q: %w", name, err)
+	}
+	return p.Path, nil
 }
 
 // Preview runs the exact `cairn show <composition> --json` request for the
@@ -93,7 +134,12 @@ func (s *Service) Preview(ctx context.Context, input CompositionInput) (Result, 
 		return Result{}, fmt.Errorf("preview: resolving bundle root: %w", err)
 	}
 
-	argv, err := buildArgv(input, bundleRoot)
+	launchPath, err := s.launchProfilePath(input.LaunchProfile)
+	if err != nil {
+		return Result{}, err
+	}
+
+	argv, err := buildArgv(input, bundleRoot, launchPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("preview: building cairn argv: %w", err)
 	}
@@ -136,17 +182,19 @@ func (s *Service) Preview(ctx context.Context, input CompositionInput) (Result, 
 // for boot, then adds only show's subcommand and --json. It cannot emit
 // --boot-root, --session, or --save-as because none is part of Arguments.
 //
-// Provider is carried through for the same reason every other field is: a
-// preview resolved against a different materialization target than the
-// launch would be a preview of a different composition. `cairn show` takes
-// --provider exactly as `cairn boot` does.
-func buildArgv(input CompositionInput, bundleRoot string) ([]string, error) {
+// The launch profile is carried through, in the same position a launch puts
+// it, for the reason every other field is: a preview resolved against a
+// different composition than the launch is a preview of the wrong thing.
+// [launch.PartsWith] is what puts it there, so the ordering rule is written
+// once.
+func buildArgv(input CompositionInput, bundleRoot, launchPath string) ([]string, error) {
 	sets := make([]compose.Set, len(input.Sets))
 	for i, set := range input.Sets {
 		sets[i] = compose.Set{Slot: set.Slot, Value: set.Value}
 	}
 	common, err := compose.Arguments(compose.Composition{
-		Target: input.Target, Bundle: bundleRoot, Provider: input.Provider, Parts: input.Parts,
+		Target: input.Target, Bundle: bundleRoot,
+		Parts:  launch.PartsWith(launchPath, input.Parts),
 		Skills: input.Skills, Prompts: input.Prompts, Sets: sets, Scope: input.Scope,
 	})
 	if err != nil {

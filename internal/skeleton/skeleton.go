@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 )
 
@@ -103,21 +102,22 @@ type entry struct {
 // this one map.
 //
 // bundle.KindHook has no entry: hook creation stays out of this package's
-// scope entirely (see the package doc), unrelated to bindings.
+// scope entirely (see the package doc).
+//
+// bundle.KindRoleProse and bundle.KindBinding had entries and no longer
+// exist as kinds at all — templates/roles/ and bindings/ both left
+// agent-setup on 2026-09-10. See internal/bundle's Kind doc.
 var registry = map[bundle.Kind]entry{
-	bundle.KindProfile:   {relPath: profileRelPath, scaffold: profileScaffold},
-	bundle.KindRoleProse: {relPath: roleProseRelPath, scaffold: roleProseScaffold},
-	bundle.KindTemplate:  {relPath: templateRelPath, scaffold: templateScaffold},
-	bundle.KindPrompt:    {relPath: promptRelPath, scaffold: promptScaffold},
-	bundle.KindSkill:     {relPath: skillRelPath, scaffold: skillScaffold},
-	bundle.KindBinding:   {relPath: binding.BindingRelPath, scaffold: bindingScaffold, refID: bindingRefID},
+	bundle.KindProfile:  {relPath: profileRelPath, scaffold: profileScaffold},
+	bundle.KindTemplate: {relPath: templateRelPath, scaffold: templateScaffold},
+	bundle.KindPrompt:   {relPath: promptRelPath, scaffold: promptScaffold},
+	bundle.KindSkill:    {relPath: skillRelPath, scaffold: skillScaffold},
 }
 
 // SupportedKinds reports which kinds [New] can create today, in
 // [bundle.Kinds]'s stable presentational order. bundle.KindHook is never in
 // this list: hook creation is out of this package's scope entirely — see
-// the package doc. bundle.KindBinding was excluded the same way before
-// CW-20260904-0002 (T23) gave it a real scaffold; it is included now.
+// the package doc.
 //
 // A caller (internal/manager.Service.NewArtifactKinds, and through it the
 // frontend's "new artifact" menu) uses this instead of hardcoding the list,

@@ -11,20 +11,30 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/boot"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/compose"
-	"github.com/hollis-labs/tachyon/internal/testbundle"
+	"github.com/hollis-labs/tachyon/internal/launchprofile"
 )
 
 // This is a white-box test (package launch, not launch_test) because it
-// drives the unexported launch() and Service.resolveBinding() directly --
-// the orchestration seams a fake boot.Runner and a fake spawn func plug
-// into, per this task's own testing section: fakes for the runner and the
-// spawn step, and a real t.TempDir() bundle with a hand-written bindings/
-// directory for binding resolution, without ever running cairn or
-// osascript for real.
+// drives the unexported runComposition() and compositionFromInput()
+// directly -- the orchestration seams a fake boot.Runner and a fake spawn
+// func plug into: fakes for the runner and the spawn step, without ever
+// running cairn or osascript for real.
+
+// bareComposition is the minimal composition the orchestration core needs,
+// standing in for what Service.LaunchComposition builds from a palette
+// selection. It is what the binding-shaped tests below used to get from
+// launch(binding, ...), which retired with bindings.
+func bareComposition(target, bundleRoot, bootRoot string) compose.Composition {
+	return compose.Composition{
+		Target:   target,
+		Bundle:   bundleRoot,
+		BootRoot: bootRoot,
+		Session:  boot.DefaultSession,
+	}
+}
 
 // fakeRunner is a [boot.Runner] that ignores argv (beyond recording it)
 // and hands back canned stdout/stderr/err -- the same pattern
@@ -132,9 +142,9 @@ const codexFixture = `{
 func TestLaunch_CwdPreferenceBootDir(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(bootDirFixture)}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/Users/chrispian/dev/hollis-labs/apps/nanite"}
+	comp := bareComposition("eng-nanite", "/bundle/root", t.TempDir())
 
-	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	if !rec.called {
@@ -180,9 +190,9 @@ func TestLaunch_CwdPreferenceBootDir(t *testing.T) {
 func TestLaunch_CwdPreferenceProjectDir(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(projectDirFixture)}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "eng-setup", Profile: "engineer", Scope: "/Users/chrispian/dev/projects/agent-setup"}
+	comp := bareComposition("eng-setup", "/bundle/root", t.TempDir())
 
-	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	if !rec.called {
@@ -196,9 +206,9 @@ func TestLaunch_CwdPreferenceProjectDir(t *testing.T) {
 func TestLaunch_ProjectDirPreferenceWithNilScopeIsAnError(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(projectDirNilScopeFixture)}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "broken", Profile: "x", Scope: "/x"}
+	comp := bareComposition("broken", "/bundle/root", t.TempDir())
 
-	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
+	err := runComposition(context.Background(), comp, fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error for cwd_preference project_dir with a nil scope")
 	}
@@ -211,9 +221,9 @@ func TestLaunch_UnrecognizedCwdPreferenceIsAnError(t *testing.T) {
 	doc := `{"boot_dir":"/x/current","provider":"claude","scope":null,"settings_path":null,"cwd_preference":"something_else","project_dir_arg":null}`
 	fr := &fakeRunner{stdout: []byte(doc)}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "x", Profile: "x", Scope: "/x"}
+	comp := bareComposition("x", "/bundle/root", t.TempDir())
 
-	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
+	err := runComposition(context.Background(), comp, fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error for an unrecognized cwd_preference")
 	}
@@ -225,9 +235,9 @@ func TestLaunch_UnrecognizedCwdPreferenceIsAnError(t *testing.T) {
 func TestLaunch_UnknownProviderIsAnError(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(unknownProviderFixture)}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "opencode-thing", Profile: "x", Scope: "/x"}
+	comp := bareComposition("opencode-thing", "/bundle/root", t.TempDir())
 
-	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
+	err := runComposition(context.Background(), comp, fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error for a provider with no known harness binary")
 	}
@@ -240,9 +250,9 @@ func TestLaunch_InvokeErrorPropagatesAndSpawnNeverCalled(t *testing.T) {
 	underlying := errors.New("exit status 1")
 	fr := &fakeRunner{stderr: []byte(`cairn: profile "x" not found`), err: underlying}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/x"}
+	comp := bareComposition("eng-nanite", "/bundle/root", t.TempDir())
 
-	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
+	err := runComposition(context.Background(), comp, fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch returned no error when cairn failed")
 	}
@@ -258,15 +268,15 @@ func TestLaunch_InvokeErrorPropagatesAndSpawnNeverCalled(t *testing.T) {
 func TestLaunch_ComposeBuildErrorPropagatesWithoutInvokingRunner(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(bootDirFixture)}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/x"}
-
 	// Empty bootRoot: boot.Prepare refuses it ("root is required") before
 	// compose.Build ever runs (compose.Build would separately refuse via
 	// compose.ErrNoBootRoot if it were reached) -- either way this must
 	// never reach the runner.
-	err := launch(context.Background(), b, "/bundle/root", "", fr.run, rec.spawn)
+	comp := bareComposition("engineer", "/bundle/root", "")
+
+	err := runComposition(context.Background(), comp, fr.run, rec.spawn)
 	if err == nil {
-		t.Fatal("launch returned no error for a missing boot root")
+		t.Fatal("runComposition returned no error for a missing boot root")
 	}
 	if fr.gotArgv != nil {
 		t.Fatalf("runner was invoked despite compose.Build failing: argv=%v", fr.gotArgv)
@@ -276,13 +286,13 @@ func TestLaunch_ComposeBuildErrorPropagatesWithoutInvokingRunner(t *testing.T) {
 	}
 }
 
-func TestLaunch_RelaunchingSameBindingMovesPreviousAsideInsteadOfFailing(t *testing.T) {
+func TestRunComposition_RelaunchingMovesPreviousAsideInsteadOfFailing(t *testing.T) {
 	bootRoot := t.TempDir()
-	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/Users/chrispian/dev/hollis-labs/apps/nanite"}
+	comp := bareComposition("engineer", "/bundle/root", bootRoot)
 
 	fr1 := &fakeRunner{stdout: []byte(bootDirFixture)}
 	rec1 := &spawnRecorder{}
-	if err := launch(context.Background(), b, "/bundle/root", bootRoot, fr1.run, rec1.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr1.run, rec1.spawn); err != nil {
 		t.Fatalf("first launch: %v", err)
 	}
 	if !rec1.called {
@@ -294,23 +304,23 @@ func TestLaunch_RelaunchingSameBindingMovesPreviousAsideInsteadOfFailing(t *test
 	// exists" -- fakeRunner can't reproduce cairn's own refusal (it always
 	// succeeds), so what this test actually proves is the thing that makes
 	// that refusal avoidable in the first place: Prepare clears
-	// bootRoot/<key>/current on every call, unconditionally, before cairn
+	// bootRoot/<key>/<session> on every call, unconditionally, before cairn
 	// (real or fake) ever runs.
-	current := filepath.Join(bootRoot, boot.Key(b.Name), boot.CurrentSegment)
+	current := filepath.Join(bootRoot, boot.Key(comp.Target), comp.Session)
 	if err := os.MkdirAll(current, 0o755); err != nil {
-		t.Fatalf("seeding an existing current dir: %v", err)
+		t.Fatalf("seeding an existing boot dir: %v", err)
 	}
 
 	fr2 := &fakeRunner{stdout: []byte(bootDirFixture)}
 	rec2 := &spawnRecorder{}
-	if err := launch(context.Background(), b, "/bundle/root", bootRoot, fr2.run, rec2.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr2.run, rec2.spawn); err != nil {
 		t.Fatalf("second launch (relaunch): %v", err)
 	}
 	if !rec2.called {
 		t.Fatal("second launch: spawn was not called")
 	}
 
-	keyDir := filepath.Join(bootRoot, boot.Key(b.Name))
+	keyDir := filepath.Join(bootRoot, boot.Key(comp.Target))
 	entries, err := os.ReadDir(keyDir)
 	if err != nil {
 		t.Fatalf("reading %s: %v", keyDir, err)
@@ -334,20 +344,7 @@ func TestLaunch_RelaunchingSameBindingMovesPreviousAsideInsteadOfFailing(t *test
 	}
 }
 
-// --- Service.resolveBinding ------------------------------------------------
-
-// writeBindingFile writes bindings/<name>.yaml directly under bundleRoot —
-// the same per-file shape [binding.Open] reads (CW-20260904-0002 / T23).
-func writeBindingFile(t *testing.T, bundleRoot, name, contents string) {
-	t.Helper()
-	dir := filepath.Join(bundleRoot, "bindings")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%s): %v", dir, err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(contents), 0o644); err != nil {
-		t.Fatalf("writing %s.yaml: %v", name, err)
-	}
-}
+// --- Service.resolveLaunchProfile ------------------------------------------
 
 func newRootStore(t *testing.T, bundleRoot string) bundle.RootStore {
 	t.Helper()
@@ -358,42 +355,102 @@ func newRootStore(t *testing.T, bundleRoot string) bundle.RootStore {
 	return store
 }
 
-func TestResolveBinding_FindsBindingAndReturnsBundleRoot(t *testing.T) {
-	bundleDir := t.TempDir()
-	writeBindingFile(t, bundleDir, "eng-nanite", "profile: engineer\nscope: /Users/chrispian/dev/hollis-labs/apps/nanite\n")
-
-	store := newRootStore(t, bundleDir)
-	svc := NewService(store)
-
-	b, root, err := svc.resolveBinding("eng-nanite")
+// writeLaunchProfile puts one launch profile in a scratch store.
+func writeLaunchProfile(t *testing.T, dir, name, provider string) string {
+	t.Helper()
+	p, err := launchprofile.Open(dir).Create(name, []byte("---\nid: "+name+"\nprovider: "+provider+"\n---\n"))
 	if err != nil {
-		t.Fatalf("resolveBinding: %v", err)
+		t.Fatalf("writing launch profile %q: %v", name, err)
 	}
-	if b.Name != "eng-nanite" || b.Profile != "engineer" || b.Scope != "/Users/chrispian/dev/hollis-labs/apps/nanite" {
-		t.Errorf("binding = %+v", b)
-	}
-	wantRoot, err := bundle.ExpandRoot(bundleDir)
+	return p.Path
+}
+
+func TestResolveLaunchProfile_ReturnsThePathCairnIsGiven(t *testing.T) {
+	launchDir := t.TempDir()
+	want := writeLaunchProfile(t, launchDir, "codex", "codex")
+
+	svc := NewServiceWithLaunchDir(newRootStore(t, t.TempDir()), launchDir)
+
+	got, err := svc.resolveLaunchProfile("codex")
 	if err != nil {
-		t.Fatalf("ExpandRoot: %v", err)
+		t.Fatalf("resolveLaunchProfile: %v", err)
 	}
-	if root != wantRoot {
-		t.Errorf("root = %q; want %q", root, wantRoot)
+	if got != want {
+		t.Fatalf("resolveLaunchProfile = %q; want the file's own path %q", got, want)
 	}
 }
 
-func TestResolveBinding_NotFoundWrapsBindingErrNotFound(t *testing.T) {
-	bundleDir := t.TempDir()
-	writeBindingFile(t, bundleDir, "eng-nanite", "profile: engineer\nscope: /x\n")
-
-	store := newRootStore(t, bundleDir)
-	svc := NewService(store)
-
-	_, _, err := svc.resolveBinding("does-not-exist")
-	if err == nil {
-		t.Fatal("resolveBinding returned no error for a missing binding")
+// TestResolveLaunchProfile_EmptyNameResolvesToNothing is the no-launch-profile
+// case reaching cairn as no --with at all, which cairn then refuses for want
+// of a provider. That refusal is the intended shape; substituting a default
+// here would be the launcher inferring a provider.
+func TestResolveLaunchProfile_EmptyNameResolvesToNothing(t *testing.T) {
+	svc := NewServiceWithLaunchDir(newRootStore(t, t.TempDir()), t.TempDir())
+	got, err := svc.resolveLaunchProfile("")
+	if err != nil {
+		t.Fatalf("resolveLaunchProfile(\"\"): %v", err)
 	}
-	if !errors.Is(err, binding.ErrNotFound) {
-		t.Errorf("error does not wrap binding.ErrNotFound: %v", err)
+	if got != "" {
+		t.Fatalf("resolveLaunchProfile(\"\") = %q; want \"\"", got)
+	}
+}
+
+// TestResolveLaunchProfile_MissingIsAnErrorNotAFallback: falling back to a
+// default would launch a session under a posture the person did not pick,
+// and the two outcomes are indistinguishable afterwards.
+func TestResolveLaunchProfile_MissingIsAnErrorNotAFallback(t *testing.T) {
+	launchDir := t.TempDir()
+	writeLaunchProfile(t, launchDir, "default", "claude")
+
+	svc := NewServiceWithLaunchDir(newRootStore(t, t.TempDir()), launchDir)
+
+	got, err := svc.resolveLaunchProfile("does-not-exist")
+	if err == nil {
+		t.Fatalf("resolveLaunchProfile returned %q and no error for a missing profile", got)
+	}
+	if !errors.Is(err, launchprofile.ErrNotFound) {
+		t.Errorf("error does not wrap launchprofile.ErrNotFound: %v", err)
+	}
+}
+
+// TestResolveLaunchProfile_NameCannotEscapeTheStore is why the frontend
+// sends a NAME and this resolves it, rather than the frontend sending a
+// path: --with takes a file, and a path crossing the Wails boundary
+// unchecked is a path to any file on the machine.
+func TestResolveLaunchProfile_NameCannotEscapeTheStore(t *testing.T) {
+	svc := NewServiceWithLaunchDir(newRootStore(t, t.TempDir()), t.TempDir())
+
+	for _, bad := range []string{"../../../etc/passwd", "sub/dir", "..", "/absolute/path.md"} {
+		if got, err := svc.resolveLaunchProfile(bad); err == nil {
+			t.Errorf("resolveLaunchProfile(%q) = %q with no error", bad, got)
+		}
+	}
+}
+
+// TestLaunchProfileStoreIsNotRootedInTheBundle is the seam the whole design
+// turns on: changing the active bundle changes what agents are available,
+// never how they run.
+func TestLaunchProfileStoreIsNotRootedInTheBundle(t *testing.T) {
+	launchDir := t.TempDir()
+	want := writeLaunchProfile(t, launchDir, "codex", "codex")
+
+	bundleA, bundleB := t.TempDir(), t.TempDir()
+	store := newRootStore(t, bundleA)
+	svc := NewServiceWithLaunchDir(store, launchDir)
+
+	first, err := svc.resolveLaunchProfile("codex")
+	if err != nil {
+		t.Fatalf("resolveLaunchProfile against bundle A: %v", err)
+	}
+	if err := store.Save(bundleB); err != nil {
+		t.Fatalf("switching the active bundle: %v", err)
+	}
+	second, err := svc.resolveLaunchProfile("codex")
+	if err != nil {
+		t.Fatalf("resolveLaunchProfile against bundle B: %v", err)
+	}
+	if first != want || second != want {
+		t.Fatalf("the launch profile moved with the bundle root: %q then %q, want %q both times", first, second, want)
 	}
 }
 
@@ -463,18 +520,20 @@ func TestResolveCwd(t *testing.T) {
 // covers for compose.Composition directly, run here one layer up, from
 // exactly the shape the frontend sends across the Wails boundary.
 func TestCompositionFromInput_MapsEveryFieldToTheMatchingCairnFlag(t *testing.T) {
+	const launchPath = "/config/tachyon/launch/default.md"
 	input := CompositionInput{
-		Target:  "eng-nanite",
-		Skills:  []string{"skill-one", "skill-two"},
-		Prompts: []string{"report", "onboarding"},
-		Scope:   "/scope/path",
+		Target:        "engineer",
+		LaunchProfile: "default",
+		Skills:        []string{"skill-one", "skill-two"},
+		Prompts:       []string{"report", "onboarding"},
+		Scope:         "/scope/path",
 		Sets: []SetInput{
 			{Slot: "slot-one", Value: "value-one"},
 		},
 		Parts: []string{"extra-part"},
 	}
 
-	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root")
+	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root", launchPath)
 
 	argv, err := compose.Build(comp)
 	if err != nil {
@@ -482,10 +541,17 @@ func TestCompositionFromInput_MapsEveryFieldToTheMatchingCairnFlag(t *testing.T)
 	}
 
 	want := []string{
-		"boot", "eng-nanite",
+		"boot", "engineer",
 		"--profile", "/bundle/root",
-		"--boot-root", "/state/boot/root",
-		"--session", "current",
+		// The boot root carries the project segment: the layout is
+		// <boot-root>/<project>/<profile>/<launch profile>, and cairn plants
+		// only the last two.
+		"--boot-root", boot.ProjectRoot("/state/boot/root", "/scope/path"),
+		"--session", boot.SessionKey("default"),
+		// The launch profile first, then the one-off part: cairn folds
+		// closest-wins in order, so a --with added for this launch must be
+		// able to override what the stored profile declared.
+		"--with", launchPath,
 		"--with", "extra-part",
 		"--skill", "skill-one,skill-two",
 		"--prompt", "report,onboarding",
@@ -498,12 +564,13 @@ func TestCompositionFromInput_MapsEveryFieldToTheMatchingCairnFlag(t *testing.T)
 	}
 }
 
-// TestCompositionFromInput_BareProfileIsACompleteTarget is T33's narrow
-// backend contract: the palette does not need to resolve or select a binding
-// before launch. A profile id is already a valid Cairn boot target, and the
-// mapping must preserve it as the positional target while carrying every
-// one-time addition exactly as it does for a binding name.
+// TestCompositionFromInput_BareProfileIsACompleteTarget: a profile id is
+// the whole target, and a composition with no launch profile still maps
+// every one-time addition through. cairn will refuse this particular one
+// for want of a provider, which is the intended shape and not this
+// function's business — its job is the mapping.
 func TestCompositionFromInput_BareProfileIsACompleteTarget(t *testing.T) {
+	const launchPath = ""
 	input := CompositionInput{
 		Target:  "engineer",
 		Parts:   []string{"writer", "reviewer"},
@@ -513,7 +580,7 @@ func TestCompositionFromInput_BareProfileIsACompleteTarget(t *testing.T) {
 		Scope:   "/literal/project/path",
 	}
 
-	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root")
+	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root", launchPath)
 	argv, err := compose.Build(comp)
 	if err != nil {
 		t.Fatalf("compose.Build: %v", err)
@@ -522,8 +589,8 @@ func TestCompositionFromInput_BareProfileIsACompleteTarget(t *testing.T) {
 	want := []string{
 		"boot", "engineer",
 		"--profile", "/bundle/root",
-		"--boot-root", "/state/boot/root",
-		"--session", "current",
+		"--boot-root", boot.ProjectRoot("/state/boot/root", "/literal/project/path"),
+		"--session", boot.SessionKey(""),
 		"--with", "writer",
 		"--with", "reviewer",
 		"--skill", "qstatus",
@@ -543,15 +610,15 @@ func TestCompositionFromInput_BareProfileIsACompleteTarget(t *testing.T) {
 // left at its zero value -- exactly what Palette.jsx's initial compose-form
 // state is (see Palette.jsx's own comment on this) -- must produce an argv
 // with no --skill, --scope, --set or --with at all, identical in shape to
-// what [launch] (the bare Launch(name) path) has always produced. If this
+// the orchestration core has always produced for a bare target. If this
 // ever failed, it would mean compositionFromInput started synthesizing
 // something Skills/Scope/Sets/Parts being empty should never produce --
 // exactly the class of bug the fail-alone acceptance criterion exists to
 // catch, caught here at the pure-mapping layer rather than only by
 // eyeballing the frontend.
 func TestCompositionFromInput_EmptyInputProducesTheSameMinimalArgvAsBareLaunch(t *testing.T) {
-	input := CompositionInput{Target: "eng-nanite"}
-	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root")
+	input := CompositionInput{Target: "engineer"}
+	comp := compositionFromInput(input, "/bundle/root", "/state/boot/root", "")
 
 	argv, err := compose.Build(comp)
 	if err != nil {
@@ -559,10 +626,13 @@ func TestCompositionFromInput_EmptyInputProducesTheSameMinimalArgvAsBareLaunch(t
 	}
 
 	want := []string{
-		"boot", "eng-nanite",
+		"boot", "engineer",
 		"--profile", "/bundle/root",
-		"--boot-root", "/state/boot/root",
-		"--session", "current",
+		// No scope selected: the project segment is still spelled, so an
+		// unscoped launch cannot land where a project named after a profile
+		// could later collide with it.
+		"--boot-root", boot.ProjectRoot("/state/boot/root", ""),
+		"--session", boot.DefaultSession,
 		"--json",
 	}
 	if !reflect.DeepEqual(argv, want) {
@@ -595,7 +665,7 @@ func TestCompositionFromInput_SkillsPassThroughUnmodified(t *testing.T) {
 	}
 	for _, skills := range cases {
 		input := CompositionInput{Target: "x", Skills: skills}
-		comp := compositionFromInput(input, "/bundle", "/boot")
+		comp := compositionFromInput(input, "/bundle", "/boot", "")
 		if len(comp.Skills) != len(skills) {
 			t.Fatalf("Skills %v became %v (different length)", skills, comp.Skills)
 		}
@@ -621,7 +691,7 @@ func TestCompositionFromInput_PromptsPassThroughUnmodified(t *testing.T) {
 	}
 	for _, prompts := range cases {
 		input := CompositionInput{Target: "x", Prompts: prompts}
-		comp := compositionFromInput(input, "/bundle", "/boot")
+		comp := compositionFromInput(input, "/bundle", "/boot", "")
 		if len(comp.Prompts) != len(prompts) {
 			t.Fatalf("Prompts %v became %v (different length)", prompts, comp.Prompts)
 		}
@@ -653,9 +723,9 @@ func TestRunComposition_FullCompositionReachesTheFakeRunnerVerbatim(t *testing.T
 		Sets:    []SetInput{{Slot: "role", Value: "marker"}},
 		Parts:   []string{"writer"},
 	}
-	comp := compositionFromInput(input, "/bundle/root", t.TempDir())
+	comp := compositionFromInput(input, "/bundle/root", t.TempDir(), "")
 
-	if err := runComposition(context.Background(), comp, comp.BootRoot, fr.run, rec.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
 		t.Fatalf("runComposition: %v", err)
 	}
 	if !rec.called {
@@ -678,312 +748,83 @@ func TestRunComposition_FullCompositionReachesTheFakeRunnerVerbatim(t *testing.T
 	}
 }
 
-// --- The fail-alone structural guard: Binding carries no skills field ---
+// --- The fail-alone structural guard: nothing to seed a form from -------
 
-// TestBindingCarriesNoSkillsFieldToSeedFrom is a permanent regression guard
-// for the single acceptance criterion this whole task can be failed on
-// alone: the palette's compose form must never pre-populate its skills
-// control from a binding's or profile's already-resolved skills. This
-// package cannot inspect Palette.jsx's own React state, but it CAN prove
-// something stronger and machine-checkable -- that [binding.Binding], the
-// only shape internal/binding.Service.List() ever hands the frontend
-// (see that package's own doc), carries no field, under any name or JSON
-// tag, that could even be read as "this binding's skills." If a future
-// change ever added one -- to surface a profile's resolved skills for some
-// other reason -- this test fails immediately, forcing a conscious
-// decision about the palette's compose-form seed rather than a silent one.
+// TestLaunchProfileCarriesNoSkillsFieldToSeedFrom is a permanent regression
+// guard for the single acceptance criterion this whole design can be failed
+// on alone: the palette's compose form must never pre-populate its skills
+// control from a profile's already-resolved skills. cairn's --skill flag is
+// additive only, so a control that looked pre-checked would let a person
+// UNCHECK a skill and silently get it anyway -- a wrong result that looks
+// right.
 //
-// This does not replace reading Palette.jsx by hand to confirm its own
-// initial state (useState([]), never populated from anything else); it
-// proves the stronger, structural half: even a Palette.jsx that WANTED to
-// seed from something has nothing to seed from.
-func TestBindingCarriesNoSkillsFieldToSeedFrom(t *testing.T) {
-	typ := reflect.TypeOf(binding.Binding{})
-	for i := 0; i < typ.NumField(); i++ {
-		f := typ.Field(i)
-		if strings.Contains(strings.ToLower(f.Name), "skill") {
-			t.Fatalf("binding.Binding.%s: field name contains %q -- a compose form could seed its skills control from this", f.Name, "skill")
-		}
-		tag := f.Tag.Get("json")
-		if strings.Contains(strings.ToLower(tag), "skill") {
-			t.Fatalf("binding.Binding.%s: json tag %q contains %q -- a compose form could seed its skills control from this", f.Name, tag, "skill")
-		}
-	}
+// This package cannot inspect Palette.jsx's own React state, but it CAN
+// prove something stronger and machine-checkable: that
+// [launchprofile.Profile] -- the only shape launchprofile.Service.List()
+// ever hands the frontend -- carries no field, under any name or JSON tag,
+// that could be read as "this profile's skills." Even a Palette.jsx that
+// WANTED to seed from something has nothing to seed from.
+//
+// The subject changed with the design (it was binding.Binding) and the
+// property did not. Note that a launch profile's FILE may well declare
+// spec.skills -- the composer writes them. What must never happen is those
+// reaching the frontend as a list a control can mirror.
+func TestLaunchProfileCarriesNoSkillsFieldToSeedFrom(t *testing.T) {
+	assertNoFieldMentioning(t, reflect.TypeOf(launchprofile.Profile{}), "skill")
 }
 
-// TestBindingCarriesNoPromptsFieldToSeedFrom is
-// TestBindingCarriesNoSkillsFieldToSeedFrom's exact mirror for prompts
-// (CW-20260904-0006, acceptance criterion "write a test proving there's no
-// code path that could pre-populate it from an existing binding/profile's
-// prompts"): [binding.Binding] carries no field, under any name or JSON
-// tag, that could be read as "this binding's prompts" -- so even a
-// Palette.jsx that wanted to pre-populate its prompts control from a
-// binding has structurally nothing to seed it from.
-func TestBindingCarriesNoPromptsFieldToSeedFrom(t *testing.T) {
-	typ := reflect.TypeOf(binding.Binding{})
+// TestLaunchProfileCarriesNoPromptsFieldToSeedFrom is the exact mirror for
+// prompts (CW-20260904-0006), for the identical reason: cairn's --prompt
+// flag documents itself as "Additive only, for the reason --skill is".
+func TestLaunchProfileCarriesNoPromptsFieldToSeedFrom(t *testing.T) {
+	assertNoFieldMentioning(t, reflect.TypeOf(launchprofile.Profile{}), "prompt")
+}
+
+// assertNoFieldMentioning fails if any field name or json tag on typ
+// contains word.
+func assertNoFieldMentioning(t *testing.T, typ reflect.Type, word string) {
+	t.Helper()
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
-		if strings.Contains(strings.ToLower(f.Name), "prompt") {
-			t.Fatalf("binding.Binding.%s: field name contains %q -- a compose form could seed its prompts control from this", f.Name, "prompt")
+		if strings.Contains(strings.ToLower(f.Name), word) {
+			t.Fatalf("%s.%s: field name contains %q -- a compose form could seed its %ss control from this", typ.Name(), f.Name, word, word)
 		}
-		tag := f.Tag.Get("json")
-		if strings.Contains(strings.ToLower(tag), "prompt") {
-			t.Fatalf("binding.Binding.%s: json tag %q contains %q -- a compose form could seed its prompts control from this", f.Name, tag, "prompt")
+		if tag := f.Tag.Get("json"); strings.Contains(strings.ToLower(tag), word) {
+			t.Fatalf("%s.%s: json tag %q contains %q -- a compose form could seed its %ss control from this", typ.Name(), f.Name, tag, word, word)
 		}
 	}
 }
 
 // --- Real end-to-end: a full composition through the real cairn binary --
+
+// TestLaunchComposition_RealCairnRendersTheWholeComposition drives the whole
+// launch through the real cairn binary: a bare agent profile as the target, a
+// launch profile supplying the provider, an ordered part, an explicitly added
+// skill, a prompt, a set override and a literal scope. Reading the planted
+// files back proves this is a rendered composition rather than only an
+// argv-shape assertion.
 //
-// This test writes nothing outside a t.TempDir() -- see the "never
-// ~/dev/agent-os" hazard internal/compose's own package doc guards
-// against (D9).
-
-// TestLaunchComposition_RealCairnRendersPartSkillAndSetIntoTheBootDirectory
-// is this task's own required proof, run as a real integration test rather
-// than asserted only from --help text: a full composition -- a target
-// binding, an ADDED skill, an ADDED prompt (CW-20260904-0006), an ADDED
-// --with part, and a --set override -- through the real cairn binary
-// against the real, read-only ~/dev/projects/agent-setup bundle, into a
-// scratch boot root this test owns and t.TempDir() cleans up. It then reads
-// the actual rendered files cairn wrote and confirms all four landed:
+// It absorbed a second test that ran the same path against a saved binding.
+// There is no such path any more, and the two had converged on the same
+// assertions anyway.
 //
-//   - the added skill's own content file exists under the composed boot
-//     directory's .claude/skills/, with the same content the installed
-//     skill source carries (proving cairn rendered it, not merely that a
-//     directory of that name exists);
-//   - the added prompt lands at .claude/commands/boot/<name>.md, its
-//     marker-free prose intact from prompts/<name>.md in the bundle and its
-//     cairn:value markers substituted with this composition's real
-//     instance values -- prompts turn out to be templated at plant time,
-//     not copied raw (see the assertion's own comment) -- this is
-//     CW-20260904-0006's own gate-verification requirement ("Verify
-//     --prompt against the installed binary"), proven for real against the
-//     binary actually installed on this machine rather than only against
-//     its --help text;
-//   - the added --with part's own skill (writer's "blg", which eng-nanite's
-//     own profile -- engineer -- does not declare on its own) exists too,
-//     proving the part reached rendering and was not silently folded away;
-//   - the --set override's value is present in the rendered AGENTS.md,
-//     proving --set's substitution reached the document Cairn wrote, not
-//     merely that cairn exited 0.
+// The launch profile is the load-bearing addition. No profile in agent-setup
+// declares a provider, so without one cairn refuses the render outright --
+// which makes this test the end-to-end proof that the seam works at all, not
+// just that a composition maps to flags.
 //
-// This is the filesystem-inspection half of "Hotkey -> compose -> Enter ->
-// an iTerm2 session opens with the composed selection" the task record
-// asks for: iTerm2 actually opening was already proven by T12
-// (CW-20260903-0016); what this proves is that the COMPOSITION -- the part
-// of this whole chain T13 actually adds -- reaches the boot directory
-// correctly. runComposition is driven directly, with a fake spawn (so this
-// test never opens a real terminal) and the real [boot.ExecRunner], the
-// same "fake the two edges, keep the real middle" shape
-// internal/boot/reconcile_test.go and cmd/tachyon/integration_test.go both
-// use.
+// It skips, with a message saying why, only when a prerequisite is genuinely
+// absent: cairn not on PATH, or the bundle not present. A bundle that IS
+// present but missing a fixture this test is keyed to FAILS instead -- that
+// distinction is what caught agent-setup retiring bindings/ out from under
+// Tachyon.
 //
-// It skips, with a message saying why, only when a prerequisite is
-// genuinely absent from the machine running it: cairn not on PATH, the
-// ~/dev/projects/agent-setup bundle itself not present, or the "writer" /
-// "qstatus" / "report" fixtures this test's assertions are keyed to not
-// existing in it today (bundle content can move; a stale test target is a
-// reason to update this test, not a false failure). A bundle that IS
-// present but unreadable by this build of Tachyon is a different condition
-// and FAILS instead -- see [testbundle.Resolve]'s own doc, the same
-// distinction internal/boot/reconcile_test.go relies on.
-//
-// Nothing here writes into agent-setup -- --profile only reads it,
-// confirmed by this test's own before/after `git status --short` check on
-// that repo, exactly as this task's own standing rules require. Reading
-// the planted prompt's bytes below, to compare them against the bundle's
-// own source, is a TEST assertion confirming cairn's real behavior -- not
-// Tachyon application code reading prompt content, which is exactly what
-// CW-20260904-0006 forbids; see internal/compose's "no delivery" doc.
-func TestLaunchComposition_RealCairnRendersPartSkillPromptAndSetIntoTheBootDirectory(t *testing.T) {
-	cairnPath, err := exec.LookPath("cairn")
-	if err != nil {
-		t.Skipf("cairn not on PATH, skipping the real-composition end-to-end check: %v", err)
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home directory on this machine: %v", err)
-	}
-	bundleRoot := filepath.Join(home, "dev", "projects", "agent-setup")
-
-	bindings, skip, err := testbundle.Resolve(bundleRoot)
-	if skip {
-		t.Skipf("no bundle at %s (agent-setup not present on this machine), skipping the real-composition end-to-end check", bundleRoot)
-	}
-	if err != nil {
-		t.Fatalf("bundle at %s is present but its bindings cannot be read -- this is exactly the break CW-20260904-0003 (T24) exists to catch loudly, not silence: %v", bundleRoot, err)
-	}
-
-	const target = "eng-nanite"
-	found := false
-	for _, b := range bindings {
-		if b.Name == target {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("bundle at %s is readable but has no binding named %q -- update this test's target, or the bundle", bundleRoot, target)
-	}
-
-	// git status --short before: confirm this run starts from a clean
-	// checkout of the read-only bundle, so a dirty result afterward can
-	// only be blamed on what this test itself just did.
-	beforeStatus := gitStatusShort(t, bundleRoot)
-
-	const addedSkill = "qstatus" // not in engineer.md's own `skills:` (search-first, surface-discovery)
-	const addedPrompt = "report" // prompts/report.md in the live bundle, as of 2026-09-03
-	const addedPart = "writer"   // contributes its own skill, "blg", which engineer.md does not declare
-	const partOnlySkill = "blg"  // writer.md's own skills: [blg]
-	const setSlot = "role"       // a slot engineer.md's own spec.slots declares
-	const setMarker = "TACHYON_T13_INTEGRATION_MARKER_9f3a1c"
-
-	scratchRoot := t.TempDir()
-
-	input := CompositionInput{
-		Target:  target,
-		Skills:  []string{addedSkill},
-		Prompts: []string{addedPrompt},
-		Parts:   []string{addedPart},
-		Sets:    []SetInput{{Slot: setSlot, Value: setMarker}},
-	}
-	comp := compositionFromInput(input, bundleRoot, scratchRoot)
-
-	rec := &spawnRecorder{}
-	runner := boot.ExecRunner(cairnPath)
-	if err := runComposition(context.Background(), comp, scratchRoot, runner, rec.spawn); err != nil {
-		t.Fatalf("runComposition against real cairn: %v", err)
-	}
-	if !rec.called {
-		t.Fatal("spawn was never called -- the real cairn invocation did not reach the end of runComposition")
-	}
-	bootDir := rec.cwd // cwd_preference for eng-nanite is "boot_dir" as of 2026-09-03; see resolveCwd
-	if info, statErr := os.Stat(bootDir); statErr != nil || !info.IsDir() {
-		t.Fatalf("reported boot dir %q does not exist or is not a directory: statErr=%v", bootDir, statErr)
-	}
-
-	// 1) The ADDED skill's content landed under the rendered boot
-	// directory, byte-identical to the installed skill source -- proving
-	// cairn actually rendered it, not merely that --skill was accepted.
-	renderedSkillPath := filepath.Join(bootDir, ".claude", "skills", addedSkill, "SKILL.md")
-	renderedSkill, err := os.ReadFile(renderedSkillPath)
-	if err != nil {
-		t.Fatalf("expected the added skill %q to render at %s: %v", addedSkill, renderedSkillPath, err)
-	}
-	installedSkillPath := filepath.Join(home, ".config", "agents", "skills", addedSkill, "SKILL.md")
-	if installedSkill, err := os.ReadFile(installedSkillPath); err == nil {
-		if string(renderedSkill) != string(installedSkill) {
-			t.Errorf("rendered skill %s content does not match the installed source at %s", renderedSkillPath, installedSkillPath)
-		}
-	} else {
-		t.Logf("installed skill source at %s not readable (%v); skipping the byte-identical comparison, keeping the existence+non-empty check below", installedSkillPath, err)
-	}
-	if len(renderedSkill) == 0 {
-		t.Errorf("rendered skill file %s is empty", renderedSkillPath)
-	}
-
-	// 2) The ADDED prompt landed exactly where Cairn's design record says a
-	// prompt is planted -- .claude/commands/boot/<name>.md. This is
-	// CW-20260904-0006's own required proof that --prompt works against
-	// the real, installed binary, not just its --help text (which the
-	// gate-verification step of that task already read). Tachyon itself
-	// never reads this file's content anywhere in its own code -- see
-	// internal/compose's "no delivery" doc -- this read is the test
-	// confirming cairn's real behavior, not application logic.
-	//
-	// NOT byte-identical to the source: this run's very first attempt
-	// asserted exact equality and failed, which is itself the finding
-	// worth recording -- prompts/report.md's own <!-- cairn:value ... -->
-	// markers (binding/profile/scope/session) get substituted at plant
-	// time exactly like a template's do, matching prompts/README.md's own
-	// words ("A prompt is a template ... substituted from the same slots
-	// and instance values") more literally than this test first assumed.
-	// So the proof below is: the file exists, is non-empty, keeps the
-	// source's marker-free prose verbatim, and the substituted lines carry
-	// this composition's real instance values -- the same "substitution
-	// reached the document" shape assertion 4 below already uses for
-	// --set, not a raw-copy assumption. Tachyon does not perform this
-	// substitution and does not need to -- it only ever handed cairn a
-	// name.
-	plantedPromptPath := filepath.Join(bootDir, ".claude", "commands", "boot", addedPrompt+".md")
-	plantedPrompt, err := os.ReadFile(plantedPromptPath)
-	if err != nil {
-		t.Fatalf("expected the added prompt %q to be planted at %s: %v", addedPrompt, plantedPromptPath, err)
-	}
-	if len(plantedPrompt) == 0 {
-		t.Errorf("planted prompt %s is empty", plantedPromptPath)
-	}
-	sourcePromptPath := filepath.Join(bundleRoot, "prompts", addedPrompt+".md")
-	sourcePrompt, err := os.ReadFile(sourcePromptPath)
-	if err != nil {
-		t.Fatalf("reading the bundle's own source prompt %s: %v", sourcePromptPath, err)
-	}
-	for _, line := range strings.Split(string(sourcePrompt), "\n") {
-		if strings.Contains(line, "cairn:value") {
-			continue // this line is expected to change -- it is what substitution means
-		}
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if !strings.Contains(string(plantedPrompt), line) {
-			t.Errorf("planted prompt %s is missing a marker-free line the source carries verbatim: %q", plantedPromptPath, line)
-		}
-	}
-	if !strings.Contains(string(plantedPrompt), "binding: "+target) {
-		t.Errorf("planted prompt %s does not contain the substituted binding value %q -- substitution did not reach the document", plantedPromptPath, target)
-	}
-	if !strings.Contains(string(plantedPrompt), "session: current") {
-		t.Errorf("planted prompt %s does not contain the substituted session value %q -- substitution did not reach the document", plantedPromptPath, "current")
-	}
-
-	// 3) The ADDED --with part's own contribution (a skill engineer.md does
-	// not itself declare) also landed -- proving the part reached
-	// rendering, not just the target's own cascade.
-	partSkillPath := filepath.Join(bootDir, ".claude", "skills", partOnlySkill, "SKILL.md")
-	if _, err := os.Stat(partSkillPath); err != nil {
-		t.Errorf("expected --with %s's own skill %q to render at %s (proving the part reached rendering): %v", addedPart, partOnlySkill, partSkillPath, err)
-	}
-
-	// 4) The --set override's value is present in the rendered AGENTS.md --
-	// proving the substitution reached the document cairn wrote.
-	agentsPath := filepath.Join(bootDir, "AGENTS.md")
-	agentsContent, err := os.ReadFile(agentsPath)
-	if err != nil {
-		t.Fatalf("reading rendered %s: %v", agentsPath, err)
-	}
-	if !strings.Contains(string(agentsContent), setMarker) {
-		t.Errorf("rendered %s does not contain the --set %s=%s marker %q -- substitution did not reach the document", agentsPath, setSlot, setMarker, setMarker)
-	}
-
-	// The target's OWN default skills (search-first, surface-discovery)
-	// must still be present too -- confirming the composition ADDED
-	// addedSkill on top of the resolved profile rather than replacing it.
-	for _, own := range []string{"search-first", "surface-discovery"} {
-		p := filepath.Join(bootDir, ".claude", "skills", own, "SKILL.md")
-		if _, err := os.Stat(p); err != nil {
-			t.Errorf("expected engineer.md's own skill %q to still be present at %s (additive, not replacing): %v", own, p, err)
-		}
-	}
-
-	afterStatus := gitStatusShort(t, bundleRoot)
-	if beforeStatus != afterStatus {
-		t.Fatalf("git status --short on %s changed during this test:\nbefore: %q\nafter:  %q\n(this test must only ever read that bundle)", bundleRoot, beforeStatus, afterStatus)
-	}
-}
-
-// TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition is
-// T33's end-to-end distinction from the binding-based test above. Target is
-// the bare profile id "engineer" -- no binding selection or resolution --
-// while an ordered part, an explicitly added skill, a prompt, a set override
-// and a literal scope all travel through the real Cairn binary. The test also
-// proves the live catalog has no binding named "engineer", so a successful
-// run cannot accidentally be exercising the old selected-binding path.
-// Reading the planted files back proves this is a rendered composition rather
-// than only an argv-shape assertion. The real bundle remains read-only; Cairn
-// writes exclusively beneath scratchRoot.
-func TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition(t *testing.T) {
+// Nothing here writes into agent-setup -- --profile only reads it, confirmed
+// by this test's own before/after `git status --short` check. Reading the
+// planted prompt's bytes is a TEST assertion confirming cairn's behavior, not
+// Tachyon application code reading prompt content, which internal/compose's
+// "no delivery" doc forbids.
+func TestLaunchComposition_RealCairnRendersTheWholeComposition(t *testing.T) {
 	cairnPath, err := exec.LookPath("cairn")
 	if err != nil {
 		t.Skipf("cairn not on PATH, skipping bare-profile integration check: %v", err)
@@ -1006,8 +847,8 @@ func TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition(t *tes
 		partOnlySkill = "blg"
 		addedSkill    = "qstatus"
 		prompt        = "report"
-		setSlot       = "role"
-		setMarker     = "TACHYON_T33_BARE_PROFILE_MARKER_4d8f2a"
+		setSlot       = "charter"
+		setMarker     = "TACHYON_E2E_MARKER_4d8f2a"
 	)
 	for _, required := range []string{
 		filepath.Join(bundleRoot, "profiles", target+".md"),
@@ -1026,28 +867,30 @@ func TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition(t *tes
 			t.Fatalf("required live-bundle fixture %s is unavailable: %v", required, statErr)
 		}
 	}
-	if unexpected, getErr := binding.Open(bundleRoot).Get(target); getErr == nil {
-		t.Fatalf("live bundle unexpectedly has a binding named %q (%+v); this test would no longer prove a bare-profile launch", target, unexpected)
-	} else if !errors.Is(getErr, binding.ErrNotFound) {
-		t.Fatalf("checking that %q is not a saved binding: %v", target, getErr)
-	}
 
 	beforeStatus := gitStatusShort(t, bundleRoot)
 	scratchRoot := t.TempDir()
 	literalScope := t.TempDir()
+
+	// The launch profile: the only thing in this whole composition that
+	// declares a provider, and therefore the only reason cairn renders at all.
+	launchDir := t.TempDir()
+	launchPath := writeLaunchProfile(t, launchDir, "e2e", "claude")
+
 	input := CompositionInput{
-		Target:  target,
-		Parts:   []string{addedPart},
-		Skills:  []string{addedSkill},
-		Prompts: []string{prompt},
-		Sets:    []SetInput{{Slot: setSlot, Value: setMarker}},
-		Scope:   literalScope,
+		Target:        target,
+		LaunchProfile: "e2e",
+		Parts:         []string{addedPart},
+		Skills:        []string{addedSkill},
+		Prompts:       []string{prompt},
+		Sets:          []SetInput{{Slot: setSlot, Value: setMarker}},
+		Scope:         literalScope,
 	}
-	comp := compositionFromInput(input, bundleRoot, scratchRoot)
+	comp := compositionFromInput(input, bundleRoot, scratchRoot, launchPath)
 
 	rec := &spawnRecorder{}
-	if err := runComposition(context.Background(), comp, scratchRoot, boot.ExecRunner(cairnPath), rec.spawn); err != nil {
-		t.Fatalf("runComposition with bare profile %q: %v", target, err)
+	if err := runComposition(context.Background(), comp, boot.ExecRunner(cairnPath), rec.spawn); err != nil {
+		t.Fatalf("runComposition with profile %q: %v", target, err)
 	}
 	if !rec.called {
 		t.Fatal("spawn was not reached after the real bare-profile Cairn invocation")
@@ -1081,19 +924,39 @@ func TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition(t *tes
 	if err != nil {
 		t.Fatalf("prompt %q was not planted at %s: %v", prompt, promptPath, err)
 	}
-	if !strings.Contains(string(promptBytes), "binding: "+target) {
-		t.Errorf("planted prompt %s does not carry bare target %q", promptPath, target)
+	if len(promptBytes) == 0 {
+		t.Errorf("planted prompt %s is empty", promptPath)
 	}
 
-	// Set and scope both reached Cairn's rendered instance values.
+	// The rendered instruction document exists and is not empty. Cairn
+	// refuses a profile with a body and no instruction artifact, so an
+	// AGENTS.md that failed to render is a failure this catches here.
 	agentsPath := filepath.Join(bootDir, "AGENTS.md")
 	agentsBytes, err := os.ReadFile(agentsPath)
 	if err != nil {
 		t.Fatalf("reading rendered %s: %v", agentsPath, err)
 	}
-	if !strings.Contains(string(agentsBytes), setMarker) {
-		t.Errorf("rendered %s does not contain --set marker %q", agentsPath, setMarker)
+	if len(agentsBytes) == 0 {
+		t.Errorf("rendered %s is empty", agentsPath)
 	}
+
+	// --set's marker is deliberately NOT asserted in the document, and the
+	// reason is a finding rather than a simplification.
+	//
+	// This assertion used to pass with setSlot = "role". agent-setup retired
+	// spec.slots entirely on 2026-09-10 when profiles became templates in
+	// their own right -- measured against the live catalog, NO profile
+	// declares a slot any more. So --set names a slot that does not exist,
+	// substitutes into nothing, and cairn exits 0 without a word: a control
+	// in the palette that silently does nothing against this bundle.
+	//
+	// The flag is still cairn's and still valid, so it stays wired; a bundle
+	// that declares a slot again would use it. What is gone is anything for
+	// this test to observe. compose's own tests still pin that --set reaches
+	// the argv, which is the half Tachyon owns. Tracked as Torque
+	// CW-20260910-0080.
+	_ = setSlot
+	_ = setMarker
 	// macOS resolves /var through its /private/var symlink while Cairn
 	// canonicalizes scope. The argv test above proves Tachyon forwards the
 	// literal unchanged; this assertion follows Cairn's rendered form.
@@ -1105,9 +968,18 @@ func TestLaunchComposition_RealCairnBareProfileRendersTheWholeComposition(t *tes
 		t.Errorf("planted prompt %s does not contain rendered scope %q", promptPath, renderedScope)
 	}
 
+	// The target's OWN skills must still be present: the composition ADDED
+	// on top of the resolved profile rather than replacing it.
+	for _, own := range []string{"search-first", "surface-discovery"} {
+		own := filepath.Join(bootDir, ".claude", "skills", own, "SKILL.md")
+		if _, err := os.Stat(own); err != nil {
+			t.Errorf("expected engineer.md's own skill at %s to still be present (additive, not replacing): %v", own, err)
+		}
+	}
+
 	afterStatus := gitStatusShort(t, bundleRoot)
 	if beforeStatus != afterStatus {
-		t.Fatalf("git status --short on %s changed during bare-profile test:\nbefore: %q\nafter:  %q", bundleRoot, beforeStatus, afterStatus)
+		t.Fatalf("git status --short on %s changed during this test:\nbefore: %q\nafter:  %q", bundleRoot, beforeStatus, afterStatus)
 	}
 }
 
@@ -1168,9 +1040,9 @@ func TestLaunch_CodexSpawnsFromTheBootDirWithItsHomeAndScope(t *testing.T) {
 	scope := "/Users/chrispian/dev/projects/agent-setup"
 	fr := &fakeRunner{stdout: []byte(codexReport(bootDir, scope, "null"))}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "codex-coord-agent-setup", Profile: "orchestrator", Scope: scope}
+	comp := bareComposition("codex-coord-agent-setup", "/bundle/root", t.TempDir())
 
-	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	if !rec.called {
@@ -1209,9 +1081,9 @@ func TestLaunch_CodexSpawnsFromTheBootDirWithItsHomeAndScope(t *testing.T) {
 func TestLaunch_ClaudeGainedNothing(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(bootDirFixture)}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "eng-nanite", Profile: "engineer", Scope: "/Users/chrispian/dev/hollis-labs/apps/nanite"}
+	comp := bareComposition("eng-nanite", "/bundle/root", t.TempDir())
 
-	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	wantArgv := []string{"claude", "--settings", "/state/boot/eng-nanite/current/.claude/settings.json"}
@@ -1230,41 +1102,61 @@ func TestLaunch_ClaudeGainedNothing(t *testing.T) {
 // provider control has to arrive at cairn as --provider, or the boot
 // directory is rendered for the wrong harness and everything downstream is
 // consistent with the wrong answer.
-func TestRunComposition_ProviderReachesTheCairnArgv(t *testing.T) {
+func TestRunComposition_LaunchProfileReachesTheCairnArgvAsTheFirstWith(t *testing.T) {
 	bootDir := "/state/boot/orchestrator/current"
 	scope := "/Users/chrispian/dev/projects/agent-setup"
 	fr := &fakeRunner{stdout: []byte(codexReport(bootDir, scope, "null"))}
 	rec := &spawnRecorder{}
 
+	const launchPath = "/config/tachyon/launch/codex.md"
 	comp := compositionFromInput(CompositionInput{
-		Target:   "orchestrator",
-		Provider: "codex",
-		Parts:    []string{"codex-cli"},
-	}, "/bundle/root", t.TempDir())
+		Target:        "orchestrator",
+		LaunchProfile: "codex",
+		Parts:         []string{"nanite-domain"},
+	}, "/bundle/root", t.TempDir(), launchPath)
 
-	if err := runComposition(context.Background(), comp, comp.BootRoot, fr.run, rec.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
 		t.Fatalf("runComposition: %v", err)
 	}
-	if !argvHasPair(fr.gotArgv, "--provider", "codex") {
-		t.Fatalf("cairn argv %v does not carry --provider codex", fr.gotArgv)
+	if !argvHasPair(fr.gotArgv, "--with", launchPath) {
+		t.Fatalf("cairn argv %v does not carry the launch profile as --with", fr.gotArgv)
+	}
+	// Order is the contract, not an accident: the launch profile must come
+	// first so a one-off part can override what it declared.
+	first, second := -1, -1
+	for i, a := range fr.gotArgv {
+		if a != "--with" {
+			continue
+		}
+		if fr.gotArgv[i+1] == launchPath {
+			first = i
+		}
+		if fr.gotArgv[i+1] == "nanite-domain" {
+			second = i
+		}
+	}
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("cairn argv %v does not put the launch profile before the one-off part", fr.gotArgv)
 	}
 }
 
-// TestRunComposition_NoProviderSelectedSendsNoFlag: the ordinary case. An
-// empty control is not "claude", it is "whatever the resolved profile
-// cascade declares" -- which is how the palette's direct Enter-on-a-binding
-// path lands on Codex for a binding whose content says so.
-func TestRunComposition_NoProviderSelectedSendsNoFlag(t *testing.T) {
+// TestRunComposition_NoProviderFlagIsEverSent: --provider is gone. The
+// provider is declared in the launch profile and folded in by cairn's own
+// cascade, so a flag here would be a second source for one value.
+func TestRunComposition_NoProviderFlagIsEverSent(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(bootDirFixture)}
 	rec := &spawnRecorder{}
-	comp := compositionFromInput(CompositionInput{Target: "eng-nanite"}, "/bundle/root", t.TempDir())
+	comp := compositionFromInput(
+		CompositionInput{Target: "engineer", LaunchProfile: "default"},
+		"/bundle/root", t.TempDir(), "/config/tachyon/launch/default.md",
+	)
 
-	if err := runComposition(context.Background(), comp, comp.BootRoot, fr.run, rec.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
 		t.Fatalf("runComposition: %v", err)
 	}
 	for _, a := range fr.gotArgv {
 		if a == "--provider" {
-			t.Fatalf("cairn argv %v carries --provider for an unset control", fr.gotArgv)
+			t.Fatalf("cairn argv %v carries --provider", fr.gotArgv)
 		}
 	}
 }
@@ -1294,9 +1186,9 @@ func TestLaunch_CodexLinksHomeResourcesBeforeSpawning(t *testing.T) {
 	scope := t.TempDir()
 	fr := &fakeRunner{stdout: []byte(codexReport(bootDir, scope, `["auth.json", "hooks.json", "hooks"]`))}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "codex-coord-agent-setup", Profile: "orchestrator", Scope: scope}
+	comp := bareComposition("codex-coord-agent-setup", "/bundle/root", t.TempDir())
 
-	if err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn); err != nil {
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	if !rec.called {
@@ -1340,9 +1232,9 @@ func TestLaunch_MissingHomeResourceRefusesAndSpawnsNothing(t *testing.T) {
 	scope := t.TempDir()
 	fr := &fakeRunner{stdout: []byte(codexReport(bootDir, scope, `["auth.json", "hooks.json"]`))}
 	rec := &spawnRecorder{}
-	b := binding.Binding{Name: "codex-coord-agent-setup", Profile: "orchestrator", Scope: scope}
+	comp := bareComposition("codex-coord-agent-setup", "/bundle/root", t.TempDir())
 
-	err := launch(context.Background(), b, "/bundle/root", t.TempDir(), fr.run, rec.spawn)
+	err := runComposition(context.Background(), comp, fr.run, rec.spawn)
 	if err == nil {
 		t.Fatal("launch opened a terminal without a resource cairn said the provider needs")
 	}
@@ -1357,30 +1249,50 @@ func TestLaunch_MissingHomeResourceRefusesAndSpawnsNothing(t *testing.T) {
 	}
 }
 
-// TestCompositionFromInput_ProviderPassesThroughUnmodified: the provider is
-// carried, never derived. Nothing in the mapping reads Target.
-func TestCompositionFromInput_ProviderPassesThroughUnmodified(t *testing.T) {
-	for _, provider := range []string{"", "codex", "claude", "opencode", "cluade"} {
+// TestCompositionFromInput_LaunchProfilePathPassesThroughUnmodified: the
+// path is carried, never derived. Nothing in the mapping reads Target — a
+// profile named "codex-something" says nothing about a harness, and a
+// launcher that read one out of a name would render the wrong layout the
+// first time somebody named a profile after a project rather than a tool.
+func TestCompositionFromInput_LaunchProfilePathPassesThroughUnmodified(t *testing.T) {
+	for _, path := range []string{"", "/config/tachyon/launch/codex.md", "/elsewhere/x.md"} {
 		comp := compositionFromInput(
-			CompositionInput{Target: "codex-coord-agent-setup", Provider: provider},
-			"/bundle/root", "/boot/root",
+			CompositionInput{Target: "codex-coord-agent-setup"},
+			"/bundle/root", "/boot/root", path,
 		)
-		if comp.Provider != provider {
-			t.Errorf("compositionFromInput(provider %q).Provider = %q", provider, comp.Provider)
+		if path == "" {
+			if len(comp.Parts) != 0 {
+				t.Errorf("an empty launch path produced parts %v", comp.Parts)
+			}
+			continue
+		}
+		if len(comp.Parts) != 1 || comp.Parts[0] != path {
+			t.Errorf("compositionFromInput(path %q).Parts = %v", path, comp.Parts)
 		}
 	}
 }
 
-// TestBindingCarriesNoProviderFieldToSeedFrom is the structural half of "a
-// provider is never inferred," matching the skills and prompts guards
-// above: there is nothing in what internal/binding hands the frontend for a
-// compose form's provider control to seed itself from, so the control
-// starts empty because it has to, not because the JSX remembers to.
-func TestBindingCarriesNoProviderFieldToSeedFrom(t *testing.T) {
-	typ := reflect.TypeOf(binding.Binding{})
+// TestLaunchProfileCarriesNoProviderControlToSeedFrom is the structural
+// half of "a provider is never inferred," matching the skills and prompts
+// guards above.
+//
+// Its subject changed with the design and the property did not. It used to
+// say binding.Binding had no provider field for a compose form's provider
+// CONTROL to seed itself from. There is no provider control now — the
+// provider is declared in a launch profile — so what must stay true is that
+// compose.Composition has nowhere to put one at all: no field, no flag, no
+// second source that could disagree with the file.
+func TestLaunchProfileCarriesNoProviderControlToSeedFrom(t *testing.T) {
+	typ := reflect.TypeOf(compose.Composition{})
 	for i := 0; i < typ.NumField(); i++ {
 		if strings.Contains(strings.ToLower(typ.Field(i).Name), "provider") {
-			t.Fatalf("binding.Binding has a provider-ish field %q for a compose form to seed from", typ.Field(i).Name)
+			t.Fatalf("compose.Composition has a provider-ish field %q; the provider belongs to the launch profile alone", typ.Field(i).Name)
+		}
+	}
+	typ = reflect.TypeOf(CompositionInput{})
+	for i := 0; i < typ.NumField(); i++ {
+		if strings.Contains(strings.ToLower(typ.Field(i).Name), "provider") {
+			t.Fatalf("CompositionInput has a provider-ish field %q", typ.Field(i).Name)
 		}
 	}
 }
@@ -1395,4 +1307,81 @@ func argvHasPair(argv []string, flag, value string) bool {
 		}
 	}
 	return false
+}
+
+// --- Targets ---------------------------------------------------------------
+
+func writeProfile(t *testing.T, root, rel, frontmatter string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("---\n"+frontmatter+"---\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
+}
+
+// TestTargetsExcludesAbstractProfilesOnly pins both halves of the rule, and
+// the second is the one worth a test: cairn refuses to boot an abstract
+// profile, so offering base as a target produces a refusal a person cannot
+// act on -- while a PART is an ordinary profile cairn will happily boot, so
+// hiding one would be Tachyon inventing a distinction the catalog does not
+// make.
+func TestTargetsExcludesAbstractProfilesOnly(t *testing.T) {
+	root := t.TempDir()
+	writeProfile(t, root, "profiles/base.md", "id: base\nname: Base\nabstract: true\n")
+	writeProfile(t, root, "profiles/engineer.md", "id: engineer\nname: Engineer\ndescription: Implements one task.\n")
+	writeProfile(t, root, "profiles/architect.md", "id: architect\nname: Architect\n")
+	writeProfile(t, root, "profiles/parts/nanite-domain.md", "id: nanite-domain\n")
+
+	svc := NewService(newRootStore(t, root))
+	got, err := svc.Targets()
+	if err != nil {
+		t.Fatalf("Targets: %v", err)
+	}
+
+	ids := make([]string, 0, len(got))
+	byID := map[string]Target{}
+	for _, target := range got {
+		ids = append(ids, target.ID)
+		byID[target.ID] = target
+	}
+	want := []string{"architect", "engineer", "nanite-domain"}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("Targets() = %v; want %v (abstract excluded, part included)", ids, want)
+	}
+	if got := byID["engineer"]; got.Name != "Engineer" || got.Description != "Implements one task." {
+		t.Errorf("engineer target = %+v; want its frontmatter carried through for the row", got)
+	}
+}
+
+// TestTargetsFollowsTheActiveBundle: the target list is the bundle's, and
+// changing the bundle changes it. The launch store is the half that must NOT
+// move -- see TestLaunchProfileStoreIsNotRootedInTheBundle.
+func TestTargetsFollowsTheActiveBundle(t *testing.T) {
+	bundleA, bundleB := t.TempDir(), t.TempDir()
+	writeProfile(t, bundleA, "profiles/engineer.md", "id: engineer\n")
+	writeProfile(t, bundleB, "profiles/writer.md", "id: writer\n")
+
+	store := newRootStore(t, bundleA)
+	svc := NewService(store)
+
+	first, err := svc.Targets()
+	if err != nil {
+		t.Fatalf("Targets against bundle A: %v", err)
+	}
+	if len(first) != 1 || first[0].ID != "engineer" {
+		t.Fatalf("bundle A targets = %+v", first)
+	}
+	if err := store.Save(bundleB); err != nil {
+		t.Fatalf("switching the active bundle: %v", err)
+	}
+	second, err := svc.Targets()
+	if err != nil {
+		t.Fatalf("Targets against bundle B: %v", err)
+	}
+	if len(second) != 1 || second[0].ID != "writer" {
+		t.Fatalf("bundle B targets = %+v", second)
+	}
 }

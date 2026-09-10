@@ -58,9 +58,9 @@ type rootSettings struct {
 // path-construction site — [state.Root] is the only place "Tachyon" (the
 // directory name) is spelled now.
 func DefaultRootStore() (RootStore, error) {
-	root, err := state.Root()
+	root, err := state.ConfigDir()
 	if err != nil {
-		return RootStore{}, fmt.Errorf("bundle: locating state root: %w", err)
+		return RootStore{}, fmt.Errorf("bundle: locating config dir: %w", err)
 	}
 	return RootStore{Path: filepath.Join(root, "bundle.json")}, nil
 }

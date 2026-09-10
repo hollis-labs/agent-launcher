@@ -13,24 +13,24 @@ import (
 	"github.com/hollis-labs/tachyon/internal/bundle"
 )
 
-// The census of ~/dev/projects/agent-setup as of 2026-09-03. bindings/
-// landed since this census was first written (CW-20260904-0002 / T23):
-// this package's own Bindings() does not filter by extension (the binding
-// format is not pinned by Cairn — see internal/binding for the package
-// that reads it), so liveBindings counts all 8 *.yaml files plus
-// bindings/README.md. prompts/ landed under CW-20260904-0005 (Cairn) /
-// CW-20260904-0006 (this task): livePrompts counts report.md plus
-// prompts/README.md, the same "the directory's own README counts too"
-// shape bindings/ already established — Prompts() filters by extension,
-// not by name.
+// The census of ~/dev/projects/agent-setup, recounted 2026-09-10 after the
+// bundle's own reshaping: bindings/ retired entirely, templates/roles/ with
+// it, and templates/ grew lenses/ and projects/ in their place.
+//
+// liveTemplates is the number that moved most and says the most:
+// Templates() reads at any depth now, so it counts all 13 files under
+// templates/ rather than the 3 at its top level. The previous 4 was
+// measured when roles/ was a separate kind and templates/agents.md still
+// existed.
+//
+// Counts include each directory's own README where it has one — every
+// enumeration filters by extension, not by name.
 const (
-	liveProfiles  = 9
-	liveRoleProse = 8
-	liveTemplates = 4
+	liveProfiles  = 21
+	liveTemplates = 13
 	livePrompts   = 2
-	liveSkills    = 17
-	liveHooks     = 3
-	liveBindings  = 9
+	liveSkills    = 29
+	liveHooks     = 7
 )
 
 // TestLiveBundleCensus runs the enumeration against the real bundle.
@@ -67,12 +67,10 @@ func TestLiveBundleCensus(t *testing.T) {
 	}
 
 	t.Logf("profiles   %2d  %s", len(c.Profiles), joinProfiles(c.Profiles))
-	t.Logf("role prose %2d  %s", len(c.RoleProse), joinRoleProse(c.RoleProse))
 	t.Logf("templates  %2d  %s", len(c.Templates), joinTemplates(c.Templates))
 	t.Logf("prompts    %2d  %s", len(c.Prompts), joinPrompts(c.Prompts))
 	t.Logf("skills     %2d  %s", len(c.Skills), joinSkills(c.Skills))
 	t.Logf("hooks      %2d  %s", len(c.Hooks), joinHooks(c.Hooks))
-	t.Logf("bindings   %2d", len(c.Bindings))
 
 	const note = "; if the bundle has genuinely changed, that is not a defect in this package — update the census constants"
 	for _, tc := range []struct {
@@ -81,12 +79,10 @@ func TestLiveBundleCensus(t *testing.T) {
 		want int
 	}{
 		{"profiles", len(c.Profiles), liveProfiles},
-		{"role prose", len(c.RoleProse), liveRoleProse},
 		{"templates", len(c.Templates), liveTemplates},
 		{"prompts", len(c.Prompts), livePrompts},
 		{"skills", len(c.Skills), liveSkills},
 		{"hooks", len(c.Hooks), liveHooks},
-		{"bindings", len(c.Bindings), liveBindings},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d; want %d%s", tc.kind, tc.got, tc.want, note)
@@ -106,31 +102,24 @@ func TestLiveBundleCensus(t *testing.T) {
 		}
 	}
 
-	// The collision is total: all eight role prose files share a basename with
-	// a profile. Nothing name-derived can tell them apart.
-	profileNames := map[string]bool{}
-	for _, p := range c.Profiles {
-		profileNames[string(p.ID)] = true
-	}
-	collisions := 0
-	for _, r := range c.RoleProse {
-		if profileNames[string(r.Role)] {
-			collisions++
+	// Every nested template's id carries its own path, which is what makes
+	// it addressable at all: templates/ holds lenses/ and projects/ now, and
+	// a bare basename would collide the moment two of them agree.
+	nested := 0
+	for _, tpl := range c.Templates {
+		if strings.Contains(string(tpl.ID), "/") {
+			nested++
 		}
 	}
-	t.Logf("role prose names that also name a profile: %d of %d", collisions, len(c.RoleProse))
-	if collisions != len(c.RoleProse) {
-		t.Errorf("expected every role prose name to collide with a profile; %d of %d did", collisions, len(c.RoleProse))
+	t.Logf("templates below the top level: %d of %d", nested, len(c.Templates))
+	if nested == 0 {
+		t.Error("no nested template found; this census exists partly to prove Templates() descends, so a flat result means either the bundle or the walk changed")
 	}
 
 	// Read every artifact's bytes, then check nothing moved.
 	read := 0
 	for _, p := range c.Profiles {
 		readLive(t, b, p.Ref())
-		read++
-	}
-	for _, r := range c.RoleProse {
-		readLive(t, b, r.Ref())
 		read++
 	}
 	for _, tpl := range c.Templates {
@@ -224,14 +213,6 @@ func joinProfiles(in []bundle.Profile) string {
 	out := make([]string, len(in))
 	for i, v := range in {
 		out[i] = string(v.ID)
-	}
-	return strings.Join(out, " ")
-}
-
-func joinRoleProse(in []bundle.RoleProse) string {
-	out := make([]string, len(in))
-	for i, v := range in {
-		out[i] = string(v.Role)
 	}
 	return strings.Join(out, " ")
 }

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hollis-labs/tachyon/internal/binding"
 	"github.com/hollis-labs/tachyon/internal/bundle"
 	"github.com/hollis-labs/tachyon/internal/skeleton"
 )
@@ -25,12 +24,10 @@ func TestSupportedKindsExcludesOnlyHook(t *testing.T) {
 		t.Fatal("SupportedKinds() is empty")
 	}
 	want := map[bundle.Kind]bool{
-		bundle.KindProfile:   true,
-		bundle.KindRoleProse: true,
-		bundle.KindTemplate:  true,
-		bundle.KindPrompt:    true,
-		bundle.KindSkill:     true,
-		bundle.KindBinding:   true,
+		bundle.KindProfile:  true,
+		bundle.KindTemplate: true,
+		bundle.KindPrompt:   true,
+		bundle.KindSkill:    true,
 	}
 	seen := map[bundle.Kind]bool{}
 	for _, k := range got {
@@ -115,11 +112,27 @@ func TestNewCreatesProfile(t *testing.T) {
 	for _, want := range []string{
 		"id: newrole",
 		"extends: base",
-		"provider: claude",
 		"spec: {}",
+		// The body is a template now, and a scaffold that did not say so
+		// would leave someone writing a profile that renders no prose.
+		"{{ section charter }}",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("profile scaffold is missing %q\n---\n%s", want, content)
+		}
+	}
+
+	// A profile must NOT declare a provider. No profile in agent-setup has
+	// since 2026-09-10 -- a runtime is a launch's to choose -- and a
+	// scaffold that wrote one would put it back where it just left, one new
+	// profile at a time.
+	if strings.Contains(content, "provider: claude") || strings.Contains(content, "provider: codex") {
+		t.Errorf("profile scaffold declares a provider; that belongs to the launch profile:\n%s", content)
+	}
+	// Nor the retired marker engine, nor templates/roles/.
+	for _, gone := range []string{"cairn:slot", "cairn:value", "templates/roles"} {
+		if strings.Contains(content, gone) {
+			t.Errorf("profile scaffold mentions the retired %q:\n%s", gone, content)
 		}
 	}
 
@@ -169,8 +182,8 @@ func TestNewCreatesProfile(t *testing.T) {
 }
 
 // TestGeneratedScaffoldsUseOnlyTheBundleRoot guards every artifact scaffold
-// against reintroducing the retired installed-content layer. An ordinary
-// profile's role example must resolve inside the active Cairn bundle, and no
+// against reintroducing the retired installed-content layer. Every path a
+// scaffold names must resolve inside the active Cairn bundle, and no
 // generated artifact (including a part) may point at ~/.config/agents.
 func TestGeneratedScaffoldsUseOnlyTheBundleRoot(t *testing.T) {
 	for _, kind := range skeleton.SupportedKinds() {
@@ -180,7 +193,7 @@ func TestGeneratedScaffoldsUseOnlyTheBundleRoot(t *testing.T) {
 			if _, err := skeleton.New(root, skeleton.Spec{Kind: kind, ID: "bundle-root-audit"}); err != nil {
 				t.Fatalf("New(%s): %v", kind, err)
 			}
-			assertGeneratedTreeUsesBundleRoot(t, root, kind == bundle.KindProfile)
+			assertGeneratedTreeUsesBundleRoot(t, root)
 		})
 	}
 
@@ -189,11 +202,11 @@ func TestGeneratedScaffoldsUseOnlyTheBundleRoot(t *testing.T) {
 		if _, err := skeleton.NewPart(root, "bundle-root-audit"); err != nil {
 			t.Fatalf("NewPart: %v", err)
 		}
-		assertGeneratedTreeUsesBundleRoot(t, root, false)
+		assertGeneratedTreeUsesBundleRoot(t, root)
 	})
 }
 
-func assertGeneratedTreeUsesBundleRoot(t *testing.T, root string, wantRolePath bool) {
+func assertGeneratedTreeUsesBundleRoot(t *testing.T, root string) {
 	t.Helper()
 	var all strings.Builder
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
@@ -218,10 +231,16 @@ func assertGeneratedTreeUsesBundleRoot(t *testing.T, root string, wantRolePath b
 	if strings.Contains(content, "~/.config/agents") {
 		t.Fatalf("generated scaffold points at the retired installed-content root:\n%s", content)
 	}
-	if wantRolePath {
-		want := "$CAIRN_PROFILE_ROOT/templates/roles/bundle-root-audit.md"
-		if !strings.Contains(content, want) {
-			t.Fatalf("generated profile does not point its role example inside the active bundle; want %q:\n%s", want, content)
+	// Every path a scaffold names must be bundle-relative through the
+	// variable, so a bundle that moves needs no edit. This used to check one
+	// hardcoded role-slot example; the scaffolds now show `{{ file: ... }}`
+	// paths instead, and the rule is the same for all of them.
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.Contains(line, "{{ file:") && !strings.Contains(line, "static_file") {
+			continue
+		}
+		if !strings.Contains(line, "$CAIRN_PROFILE_ROOT") {
+			t.Errorf("a scaffold names a templates/ path that is not rooted at $CAIRN_PROFILE_ROOT: %q", strings.TrimSpace(line))
 		}
 	}
 }
@@ -240,51 +259,10 @@ func TestNewProfileDefaultNameIsTitleCased(t *testing.T) {
 	}
 }
 
-func TestNewCreatesRoleProse(t *testing.T) {
-	root := tempRoot(t)
-	ref, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindRoleProse, ID: "newrole", Name: "New Role"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if ref.Kind != bundle.KindRoleProse {
-		t.Fatalf("ref.Kind = %s; want role-prose", ref.Kind)
-	}
-	target := filepath.Join(root, "templates", "roles", "newrole.md")
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", target, err)
-	}
-	if !strings.HasPrefix(string(data), "# New Role\n") {
-		t.Errorf("role prose scaffold does not open with the heading:\n%s", data)
-	}
-	// Bare prose: no frontmatter delimiter at all.
-	if strings.HasPrefix(string(data), "---") {
-		t.Errorf("role prose scaffold has frontmatter; it must be bare prose:\n%s", data)
-	}
-
-	b, err := bundle.Open(root)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	rp, err := b.RoleProse()
-	if err != nil {
-		t.Fatalf("RoleProse: %v", err)
-	}
-	found := false
-	for _, r := range rp {
-		if r.Role == "newrole" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("the role prose file just created does not appear in RoleProse()")
-	}
-}
-
 // TestNewCreatesPrompt is CW-20260904-0006's own acceptance criterion:
 // prompts/<id>.md, scaffolded from a title heading and an explanatory HTML
-// comment (roleProseScaffold's own shape) rather than any invented slot or
-// value content -- see promptScaffold's own doc for why. Writes into a
+// comment rather than any invented content -- see promptScaffold's own doc
+// for why. Writes into a
 // t.TempDir() bundle, exactly like every other kind's creation test in this
 // file; the real ~/dev/projects/agent-setup is never touched here.
 func TestNewCreatesPrompt(t *testing.T) {
@@ -305,19 +283,16 @@ func TestNewCreatesPrompt(t *testing.T) {
 	if !strings.HasPrefix(content, "# New Prompt\n") {
 		t.Errorf("prompt scaffold does not open with the heading:\n%s", content)
 	}
-	// Bare prose: no frontmatter delimiter at all, same as role prose.
+	// Bare prose: no frontmatter delimiter at all.
 	if strings.HasPrefix(content, "---") {
 		t.Errorf("prompt scaffold has frontmatter; it must be bare prose:\n%s", content)
 	}
-	// D8, and this task's own "keep the scaffold minimal" instruction: the
-	// comment quotes prompts/README.md's own description of the marker
-	// shape (<!-- cairn:slot ... --> / <!-- cairn:value ... -->) but must
-	// not invent a real, specific marker of its own -- there is no
-	// general-purpose slot or value name to derive one from, only
-	// report.md's own task-specific ones (binding/profile/scope/session),
-	// which are particular to that one prompt, not to prompts in general.
-	if strings.Contains(content, "cairn:value scope") || strings.Contains(content, "cairn:value binding") {
-		t.Errorf("prompt scaffold invented a specific marker rather than staying minimal:\n%s", content)
+	// The scaffold must not teach the retired marker engine. agent-setup
+	// moved off it on 2026-09-10 and cairn's own docs put every directive in
+	// the profile now, so a marker here would hand someone a document the
+	// live bundle has no reader for.
+	if strings.Contains(content, "cairn:value") || strings.Contains(content, "cairn:slot") {
+		t.Errorf("prompt scaffold teaches the retired marker engine:\n%s", content)
 	}
 
 	b, err := bundle.Open(root)
@@ -354,13 +329,22 @@ func TestNewCreatesTemplate(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", target, err)
 	}
 	content := string(data)
+	// The scaffold points at the engine that is actually running: the
+	// directives live in the PROFILE, and a template named by
+	// `{{ file: ... }}` is substituted whole.
 	for _, want := range []string{
-		"binding, model, profile, provider, scope, session",
-		"<!-- cairn:slot example -->",
-		"- scope: <!-- cairn:value scope -->",
+		"{{ file:",
+		"{{ section",
+		"profiles/base.md",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("template scaffold is missing %q\n---\n%s", want, content)
+		}
+	}
+	// And must not teach the retired one.
+	for _, gone := range []string{"cairn:slot", "cairn:value", "templates/agents.md"} {
+		if strings.Contains(content, gone) {
+			t.Errorf("template scaffold still teaches the retired marker engine (%q):\n%s", gone, content)
 		}
 	}
 
@@ -433,75 +417,6 @@ func TestNewCreatesSkill(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the skill just created does not appear in Skills() -- 'picked up without a restart' failed")
-	}
-}
-
-// TestNewCreatesBinding is CW-20260904-0002's (T23) proof that the binding
-// seam this package's doc used to describe as deferred is real: New writes
-// bindings/<id>.yaml directly (not through internal/binding.Store.Create,
-// which would reject the scaffold's empty placeholder values — see
-// scaffolds.go's bindingScaffold doc), and internal/binding's own reader
-// can immediately List and Get it back without erroring the whole
-// directory, because a present-but-empty profile/scope key is valid, not
-// corrupt.
-func TestNewCreatesBinding(t *testing.T) {
-	root := tempRoot(t)
-	ref, err := skeleton.New(root, skeleton.Spec{Kind: bundle.KindBinding, ID: "fresh"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	// Unlike every other kind, a binding's bundle.Ref.ID carries its file
-	// extension (bundle.BindingID's own documented convention).
-	if ref.Kind != bundle.KindBinding || ref.ID != "fresh.yaml" {
-		t.Fatalf("New returned ref %+v; want {binding fresh.yaml}", ref)
-	}
-
-	target := filepath.Join(root, "bindings", "fresh.yaml")
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", target, err)
-	}
-	content := string(data)
-	if !strings.Contains(content, "profile:\n") || !strings.Contains(content, "scope:\n") {
-		t.Errorf("binding scaffold does not carry both blank profile: and scope: keys:\n%s", content)
-	}
-
-	// Round-trip through internal/bundle's own tree machinery, same as
-	// every other kind: picked up with no restart.
-	b, err := bundle.Open(root)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	bindings, err := b.Bindings()
-	if err != nil {
-		t.Fatalf("Bindings: %v", err)
-	}
-	found := false
-	for _, bd := range bindings {
-		if string(bd.Name) == "fresh.yaml" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("the binding just created does not appear in Bindings() -- 'picked up without a restart' failed")
-	}
-
-	// internal/binding's own reader must accept the freshly scaffolded file
-	// immediately: a present, empty profile:/scope: pair is valid, not a
-	// parse failure that would take the rest of bindings/ down with it.
-	got, err := binding.Open(root).Get("fresh")
-	if err != nil {
-		t.Fatalf("binding.Open(root).Get(fresh): %v", err)
-	}
-	if got.Name != "fresh" || got.Profile != "" || got.Scope != "" {
-		t.Errorf("binding.Get(fresh) = %+v; want {fresh \"\" \"\"}", got)
-	}
-	list, err := binding.Open(root).List()
-	if err != nil {
-		t.Fatalf("binding.Open(root).List() with a freshly scaffolded, still-blank binding present: %v", err)
-	}
-	if len(list) != 1 || list[0].Name != "fresh" {
-		t.Fatalf("binding.Open(root).List() = %+v; want exactly one binding named %q", list, "fresh")
 	}
 }
 

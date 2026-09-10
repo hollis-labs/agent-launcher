@@ -16,11 +16,9 @@ const (
 	dirProfiles  = "profiles"
 	dirParts     = "parts" // immediate subdirectory of dirProfiles
 	dirTemplates = "templates"
-	dirRoles     = "roles" // under dirTemplates
 	dirPrompts   = "prompts"
 	dirSkills    = "skills"
 	dirHooks     = "hooks"
-	dirBindings  = "bindings"
 
 	extMarkdown = ".md"
 	extShell    = ".sh"
@@ -40,8 +38,8 @@ var ErrDuplicateProfileID = errors.New("bundle: two profiles claim one id")
 // something that is not a directory now stands where it was. Test for it with
 // errors.Is.
 //
-// An artifact directory that does not exist enumerates as empty — bindings/
-// does not exist in the bundle today and that is not a fault. The root is the
+// An artifact directory that does not exist enumerates as empty — a bundle
+// with no hooks/ is not a fault. The root is the
 // one place where that rule must not apply: a user who renames the repo,
 // switches branches or types the path wrong would otherwise get a clean,
 // error-free, completely empty bundle. An empty tree meaning "your bundle is
@@ -126,13 +124,12 @@ func ExpandRoot(root string) (string, error) {
 func (b *Bundle) Root() string { return b.root }
 
 // shapeDirs are the top-level directory names whose presence under a root
-// is what [Bundle.HasKnownShape] checks for. dirRoles is deliberately
-// excluded: it nests under dirTemplates rather than sitting at the root
-// itself, so its presence or absence says nothing about the root.
-var shapeDirs = []string{dirProfiles, dirTemplates, dirPrompts, dirSkills, dirHooks, dirBindings}
+// is what [Bundle.HasKnownShape] checks for. Only top-level names belong
+// here: a directory nested inside one of these says nothing about the root.
+var shapeDirs = []string{dirProfiles, dirTemplates, dirPrompts, dirSkills, dirHooks}
 
 // HasKnownShape reports whether the root looks like a bundle at all: does
-// at least one of the six top-level artifact directories this package
+// at least one of the five top-level artifact directories this package
 // knows about exist directly under it?
 //
 // This is a shape check, not a content check (D8): it only looks at
@@ -215,42 +212,78 @@ func (b *Bundle) Profiles() ([]Profile, error) {
 	return out, nil
 }
 
-// RoleProse enumerates templates/roles/*.md, sorted by role.
+// Templates enumerates templates/**/*.md, at any depth, sorted by id.
 //
-// These share every basename with a profile. They are not profiles.
-func (b *Bundle) RoleProse() ([]RoleProse, error) {
-	names, err := b.listFiles(extMarkdown, dirTemplates, dirRoles)
+// The id is the path below templates/ with ".md" stripped, always
+// slash-separated: "claude", "lenses/primary-source-first",
+// "projects/cairn". That is what makes a nested template addressable at all
+// — a bare basename would collide the moment two directories hold the same
+// name, and agent-setup already has directories that could.
+//
+// It used to read the top level only, excluding a roles/ subdirectory that
+// held a kind of its own. roles/ is gone and templates/ grew lenses/,
+// projects/ and per-role directories in its place, so a top-level-only
+// reader saw 3 of the live bundle's 13 templates and the manager could not
+// open the other 10.
+func (b *Bundle) Templates() ([]Template, error) {
+	rels, err := b.walkFiles(extMarkdown, dirTemplates)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]RoleProse, 0, len(names))
-	for _, name := range names {
-		rel := path.Join(dirTemplates, dirRoles, name)
-		out = append(out, RoleProse{
-			Role:    RoleProseID(strings.TrimSuffix(name, extMarkdown)),
-			Path:    b.abs(rel),
-			RelPath: rel,
+	out := make([]Template, 0, len(rels))
+	for _, rel := range rels {
+		full := path.Join(dirTemplates, rel)
+		out = append(out, Template{
+			ID:      TemplateID(strings.TrimSuffix(rel, extMarkdown)),
+			Path:    b.abs(full),
+			RelPath: full,
 		})
 	}
 	return out, nil
 }
 
-// Templates enumerates templates/*.md, sorted by id. The roles/ subdirectory
-// is not included; see [Bundle.RoleProse].
-func (b *Bundle) Templates() ([]Template, error) {
-	names, err := b.listFiles(extMarkdown, dirTemplates)
-	if err != nil {
+// walkFiles lists every file under dir with the given extension, at any
+// depth, returning slash-separated paths relative to dir, sorted.
+//
+// It follows no symlinked directory, for the reason listFilesInRealDir
+// exists: a templates/ -> /somewhere/else would otherwise put arbitrary
+// files behind the manager's own open/save. Each directory entry is checked
+// with the same Lstat-based rule the flat readers use.
+func (b *Bundle) walkFiles(ext string, dir ...string) ([]string, error) {
+	var out []string
+	var walk func(segments []string, prefix string) error
+	walk = func(segments []string, prefix string) error {
+		entries, err := b.readDir(segments...)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			next := append(append([]string{}, segments...), name)
+			rel := name
+			if prefix != "" {
+				rel = prefix + "/" + name
+			}
+			if b.entryIsDir(e, next...) {
+				if err := walk(next, rel); err != nil {
+					return err
+				}
+				continue
+			}
+			if ext != "" && !strings.HasSuffix(name, ext) {
+				continue
+			}
+			out = append(out, rel)
+		}
+		return nil
+	}
+	if err := walk(dir, ""); err != nil {
 		return nil, err
 	}
-	out := make([]Template, 0, len(names))
-	for _, name := range names {
-		rel := path.Join(dirTemplates, name)
-		out = append(out, Template{
-			ID:      TemplateID(strings.TrimSuffix(name, extMarkdown)),
-			Path:    b.abs(rel),
-			RelPath: rel,
-		})
-	}
+	sort.Strings(out)
 	return out, nil
 }
 
@@ -327,36 +360,11 @@ func (b *Bundle) Hooks() ([]Hook, error) {
 	return out, nil
 }
 
-// Bindings enumerates the files directly under bindings/, sorted by name.
-//
-// An absent directory is an empty result, not an error, same as every other
-// artifact directory. Nothing here reads or interprets a binding's
-// contents — see internal/binding for the package that does.
-func (b *Bundle) Bindings() ([]Binding, error) {
-	names, err := b.listFiles("", dirBindings)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Binding, 0, len(names))
-	for _, name := range names {
-		rel := path.Join(dirBindings, name)
-		out = append(out, Binding{
-			Name:    BindingID(name),
-			Path:    b.abs(rel),
-			RelPath: rel,
-		})
-	}
-	return out, nil
-}
-
-// Contents enumerates all seven artifact kinds in one pass.
+// Contents enumerates all five artifact kinds in one pass.
 func (b *Bundle) Contents() (Contents, error) {
 	var c Contents
 	var err error
 	if c.Profiles, err = b.Profiles(); err != nil {
-		return Contents{}, err
-	}
-	if c.RoleProse, err = b.RoleProse(); err != nil {
 		return Contents{}, err
 	}
 	if c.Templates, err = b.Templates(); err != nil {
@@ -369,9 +377,6 @@ func (b *Bundle) Contents() (Contents, error) {
 		return Contents{}, err
 	}
 	if c.Hooks, err = b.Hooks(); err != nil {
-		return Contents{}, err
-	}
-	if c.Bindings, err = b.Bindings(); err != nil {
 		return Contents{}, err
 	}
 	return c, nil
@@ -491,18 +496,26 @@ func (b *Bundle) Resolve(ref Ref) (string, error) {
 			}
 		}
 		return "", fmt.Errorf("%w: %s %q", ErrNotFound, ref.Kind, ref.ID)
-	case KindRoleProse:
-		return b.resolveFile(ref, extMarkdown, dirTemplates, dirRoles)
 	case KindTemplate:
-		return b.resolveFile(ref, extMarkdown, dirTemplates)
+		// Resolved by enumeration rather than by joining the id onto
+		// templates/: the id now carries slashes, and joining a
+		// caller-supplied value holding separators onto a path is how a ref
+		// reaches outside the bundle. Matching against what the walk found
+		// cannot leave the tree.
+		templates, err := b.Templates()
+		if err != nil {
+			return "", err
+		}
+		for _, t := range templates {
+			if string(t.ID) == ref.ID {
+				return t.Path, nil
+			}
+		}
+		return "", fmt.Errorf("%w: %s %q", ErrNotFound, ref.Kind, ref.ID)
 	case KindPrompt:
 		return b.resolveFile(ref, extMarkdown, dirPrompts)
 	case KindHook:
 		return b.resolveFile(ref, extShell, dirHooks)
-	case KindBinding:
-		// The binding id carries its own extension, because the format is not
-		// pinned and the extension is part of the name.
-		return b.resolveFile(ref, "", dirBindings)
 	case KindSkill:
 		dirs, err := b.listDirs(dirSkills)
 		if err != nil {

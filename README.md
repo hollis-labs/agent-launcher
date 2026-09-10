@@ -9,9 +9,26 @@ Three responsibilities, three owners. The whole design rests on this.
 
 | | Owner | What |
 |---|---|---|
-| **Content** | `agent-setup` (the bundle) | profiles, templates, role prose, skills, bindings, hooks |
+| **Content** | `agent-setup` (the bundle) | profiles, templates, prompts, skills, hooks |
 | **Materialization** | Cairn | resolve a profile, assemble a directory, print its path, exit |
-| **Authoring + launching** | **Tachyon** | edit the bundle; compose; build argv; spawn a terminal |
+| **Authoring + launching** | **Tachyon** | edit the bundle; own the launch config; compose; build argv; spawn a terminal |
+
+Three things make a launch, and each has exactly one owner:
+
+| | Owner | Reaches Cairn as |
+|---|---|---|
+| **agent profile** — what this is | the bundle | `cairn boot <target>` |
+| **launch profile** — how it runs | Tachyon, `~/.config/tachyon/launch/` | `--with <path>` |
+| **project** — where it works | Tachyon's project list | `--scope <path>` |
+
+A launch profile is an ordinary Cairn part — not a format of Tachyon's own —
+so what Tachyon saves is exactly what Cairn consumes, and `cairn show --with`
+can preview it. It carries the provider, because no profile in the bundle
+declares one: a runtime is a launch's to choose, not an agent's to carry.
+
+This replaced **bindings**, which were a saved (profile, parts, skills, scope)
+tuple living *in the bundle*, in a format Cairn could not read. agent-setup
+retired all 34 and Cairn dropped bindings and `--save-as` on 2026-09-10.
 
 Cairn does not own content — it is a materializer pointed at a bundle, and
 `agent-setup` is one bundle it can be pointed at. Tachyon is not a Cairn
@@ -27,7 +44,9 @@ A single Wails v3 + React desktop app: two window classes over one shared Go
 core, behind one tray icon.
 
 - **The palette** — hotkey-summoned, frameless, always-on-top, dismissed on
-  Escape and on blur. Pick a binding or compose one; launch; vanish. This is the
+  Escape and on blur. Pick an agent; launch; vanish. The launch profile and
+  the project sit above the list, so Enter on a row is already a complete
+  launch and the compose modal is for one-off additions on top. This is the
   fast path, and it is what Tachyon is for.
 - **The manager** — an ordinary window that does *not* dismiss on blur. A file
   tree over the bundle and a text editor. This is the CRUD.
@@ -46,7 +65,7 @@ to change it:
 
 - **The tray icon** — right-click it and choose *Settings…*. This is the
   intended route.
-- **By hand** — edit `~/Library/Application Support/Tachyon/shell.json` and
+- **By hand** — edit `~/.config/tachyon/shell.json` and
   change the top-level `"hotkey"` key (Wails accelerator spelling, e.g.
   `"Ctrl+Option+Space"`), then restart Tachyon. A value that cannot be bound is
   replaced with the default at startup rather than leaving you with no hotkey,
@@ -82,14 +101,14 @@ Stated so nobody designs around a promise that is not there.
 The manager, composition, preview and launch paths work. Tachyon reads the
 active bundle, including ordinary profiles in both `profiles/` and
 `profiles/parts/`, shows it as a tree, and edits it as text byte-for-byte. The
-manager can create bundle artifacts, edit bindings, inspect Cairn's effective
-skills preview, manage project scopes and run the guarded old-boot-directory
-sweep on demand. A saved edit is immediately available to the next Cairn
+manager can create bundle artifacts, author launch profiles, inspect Cairn's
+effective skills preview, manage project scopes and run the guarded
+old-boot-directory sweep on demand. A saved edit is immediately available to the next Cairn
 preview or launch because both read the same active bundle directly.
 
-Summoning the palette can launch either a saved binding or an unsaved
-composition through Cairn into an iTerm2 session, for either harness Cairn
-renders a boot directory for. Claude Code launches carry
+Summoning the palette launches an agent profile through Cairn into an iTerm2
+session, for either harness Cairn renders a boot directory for, with whatever
+the compose modal added on top. Claude Code launches carry
 `--settings <bootdir>/.claude/settings.json`, permanently. Codex launches run
 from the boot directory with `CODEX_HOME` pointing at it and the real project
 granted through `--add-dir`, and the operator-owned resources Cairn names
@@ -98,13 +117,33 @@ Codex home before the terminal opens — links, never copies, so Tachyon never
 becomes a second owner of live credentials, and a missing one refuses the
 launch instead of opening a session whose hooks quietly do not run. Codex's
 first launch of a boot directory asks to trust its hooks; that prompt is the
-operator's, and nothing here bypasses it. Which harness a launch materializes
-into comes from the profile cascade, or from the palette's own Provider
-control — never from a binding's name. Composition drafts survive
-ordinary palette dismissal until they are launched or explicitly discarded.
-Boot directories have stable current paths; a relaunch moves the old directory
-aside, and the guarded startup/manual sweep removes only eligible `.prev-*`
-directories that are no longer in use.
+operator's, and nothing here bypasses it.
+
+Which harness a launch materializes into is declared in the launch profile and
+resolved through Cairn's own cascade — never inferred from a name, and never
+passed as a flag, because a flag would be a second source for a value the file
+already carries. A launch with no launch profile has no provider and Cairn
+refuses it; that is the intended shape, and Tachyon seeds a default so a first
+run has one.
+
+Composition drafts survive ordinary palette dismissal until they are launched
+or explicitly discarded.
+
+Boot directories carry one path segment per axis, grouped by project so the
+tree answers "what is running on cairn" rather than "every scope engineer has
+ever been booted at":
+
+```
+~/.local/state/tachyon/boot/cairn-8cbb5cc873/engineer/codex
+                            <project>        <profile> <launch profile>
+```
+
+The path is stable for a given composition, so a harness accrues one
+`~/.claude.json` trust entry per composition rather than one per launch. A
+relaunch moves the old directory aside — never deletes it, because a live
+session holds its cwd by inode and a rename preserves that — and the guarded
+startup/manual sweep removes only eligible `.prev-*` directories that are no
+longer in use.
 
 The Swift menubar app, the Go sidecar behind it, its bundled catalog corpus,
 the frozen `list`/`describe`/`launch` contract and the `go-agent-launch`
