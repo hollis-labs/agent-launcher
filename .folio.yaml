@@ -1,0 +1,94 @@
+folio_version: "0.1"
+generated_at: 2026-09-17T20:24:52.139869-05:00
+generator: folio/0.1.0
+presets:
+  - id: sysop-ui
+    version: 1.2.0
+    source: bundled
+    resolved_path: bundled:presets/sysop-ui
+inputs:
+  base_path: /sysop
+  description: Headless-capable, plugin-based control plane for the Hollis Labs agent fabric
+  github_owner: hollis-labs
+  go_packages: ./...
+  go_version: 1.26.1
+  go_webui_version: v0.1.0
+  project_name: tachyon
+  sysop_ui_version: v0.4.0
+computed:
+  app_title: Tachyon
+  module_path: github.com/hollis-labs/tachyon
+  year: "2026"
+files:
+  .github/workflows/ci.yml:
+    preset: sysop-ui
+    digest_at_gen: sha256:05a63240a081d471016ef69d01fc3d532f08eed0deefd9431b63db2a8f9d57e8
+  .gitignore:
+    preset: sysop-ui
+    digest_at_gen: sha256:5c236660df04feddf54320eea387124957fdc5f0b61b3b1a7669a070dfe92386
+  .golangci.yml:
+    preset: sysop-ui
+    digest_at_gen: sha256:6de49fa35698d0d59cd5c60ddd0339a0635c6f02936f76f7308f143363fec532
+  LICENSE:
+    preset: sysop-ui
+    digest_at_gen: sha256:1986445efff599a321ae0f93151d161a8810d3035ddf8adc45832e1788c90c47
+  Makefile:
+    preset: sysop-ui
+    digest_at_gen: sha256:08a470aa3b7da42768fc322ca9f1a2a312d200f7374b6da3b073bc64d39c351a
+  README.md:
+    preset: sysop-ui
+    digest_at_gen: sha256:e7de1b0b8e8308218d621945ae22282621f8dbfb473f5b4cb234ffeb23d5e59e
+  cmd/tachyon/main.go:
+    preset: sysop-ui
+    digest_at_gen: sha256:e3ced726153601bea9adf780ac52cc80818724916123931fab490976215c073b
+  frontend/biome.json:
+    preset: sysop-ui
+    digest_at_gen: sha256:09db2498b070e1cade5cab46c122eac2f52e8b397d13d958ce6d9b3799eb77c3
+  frontend/index.html:
+    preset: sysop-ui
+    digest_at_gen: sha256:ed519dc0dca844d78cbde1435ac1c0ec651ff874ac9fa4131797c6b09fa86436
+  frontend/package.json:
+    preset: sysop-ui
+    digest_at_gen: sha256:6f6bb8a42e9add70d1ff55f566e0c38fc0a156d2e05f3ac3d00b3606dbbdaa42
+  frontend/src/App.tsx:
+    preset: sysop-ui
+    digest_at_gen: sha256:a23c97b569cac11dfd06df459f08ba13ecafb06fee2b5e44602b292384c968e8
+  frontend/src/api/client.ts:
+    preset: sysop-ui
+    digest_at_gen: sha256:e14cbcbc9d2d138f8a9bb11af6f81f562b77a65c6db011adaaa068acdf6d0ba9
+  frontend/src/api/context.tsx:
+    preset: sysop-ui
+    digest_at_gen: sha256:c66dc26b94904c4adf8952a14d30ab60c1156672ac66ee0f127318b51861fc86
+  frontend/src/index.css:
+    preset: sysop-ui
+    digest_at_gen: sha256:7c69ba537e6b2e033f7438216cbfd392633c6541ce7cd7253443f66db2bf4ac8
+  frontend/src/main.tsx:
+    preset: sysop-ui
+    digest_at_gen: sha256:1a4f7aa3325227cc6c9e22236318090867aba61fa118f678e381c38b37442819
+  frontend/src/pages/dashboard.tsx:
+    preset: sysop-ui
+    digest_at_gen: sha256:a02c6f5369989e4754154dd3c926d78711d21c03bcc4c777bf337f225a24e9d8
+  frontend/tsconfig.json:
+    preset: sysop-ui
+    digest_at_gen: sha256:cedfb706483b4f605f648289e499c031cc92d2ce22755ec282bdc0dff9a4b42c
+  frontend/vite.config.ts:
+    preset: sysop-ui
+    digest_at_gen: sha256:20b96f456a053c9f207f072184fa2cef8da13dd476eba0b4fe0ef9e65c86341e
+  go.mod:
+    preset: sysop-ui
+    digest_at_gen: sha256:830c981b630c45dde8202982b7aaae09c69b1a49e83b24163a10cb4be9aa496a
+  internal/webui/dist/.gitkeep:
+    preset: sysop-ui
+    digest_at_gen: sha256:b071f7f9b5cb72296d0e5030c17497ca641fbfdd7d413fd30fa85b74eb2c59cb
+  internal/webui/embed.go:
+    preset: sysop-ui
+    digest_at_gen: sha256:cdb77de1db7d755cd2efa90e3e1a89aa738179e9370564a7ab30d12833d39669
+  lefthook.yml:
+    preset: sysop-ui
+    digest_at_gen: sha256:d424537298f7e9aa7d180dd0e8f73f3370c05ee1032479d68c3cda24e576ffbe
+sync_history:
+  - at: 2026-09-17T20:24:52.139869-05:00
+    operation: init
+    presets:
+      - id: sysop-ui
+        version: 1.2.0

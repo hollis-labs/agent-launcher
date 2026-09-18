@@ -1,4 +1,0 @@
----
-id: solo
-name: Solo
----
