@@ -2,9 +2,7 @@
 /build/
 frontend/node_modules/
 
-# Agent-facing and machine-local files, kept on disk but not tracked
-AGENTS.md
-CLAUDE.md
+# Machine-local agent state and internal planning material, not tracked
 .claude/
 .agentrc/
 *.cerberus.yaml
