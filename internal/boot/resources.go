@@ -20,6 +20,11 @@ import (
 // silently produces an unauthenticated session.
 var homeDefaults = map[string]string{
 	"CODEX_HOME": ".codex",
+	// OpenCode's global config directory. Its auth lives elsewhere
+	// (~/.local/share/opencode), so Cairn names no home resources for it and
+	// nothing is linked from here; the entry is what lets its
+	// OPENCODE_CONFIG_DIR amendment resolve at all.
+	"OPENCODE_CONFIG_DIR": ".config/opencode",
 }
 
 // ErrHomeResource is the class of failure [PrepareHomeResources] reports:

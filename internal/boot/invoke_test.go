@@ -563,7 +563,7 @@ func TestHarnessArgv_CodexWithNoScopeGrantsNothing(t *testing.T) {
 // wrong harness, or a bare `claude` with no flags at all, is the outcome
 // this refusal exists to prevent.
 func TestHarnessArgv_UnknownProviderIsARefusalNotAnEmptyArgv(t *testing.T) {
-	for _, provider := range []string{"", "opencode", "Claude", "gemini"} {
+	for _, provider := range []string{"", "antigravity", "Claude", "gemini"} {
 		argv, err := boot.HarnessArgv(boot.Result{BootDir: "/state/boot/x/current", Provider: provider})
 		if err == nil {
 			t.Errorf("HarnessArgv(provider %q) = %v, nil; want a refusal", provider, argv)
@@ -664,5 +664,43 @@ func TestHarnessArgv_IgnoresAnEmptyReportedPath(t *testing.T) {
 		if a == "--settings" && argv[i+1] == "" {
 			t.Fatal("--settings was given an empty path")
 		}
+	}
+}
+
+// --- OpenCode (CW-20260930-0142) ------------------------------------------
+
+// TestHarnessArgv_OpenCodePassesTheScopeAsItsProject: OpenCode's report
+// carries the interactive positional, so the argv is the scope alone.
+func TestHarnessArgv_OpenCodePassesTheScopeAsItsProject(t *testing.T) {
+	scope := "/Users/chrispian/dev/projects/agent-setup"
+	result := boot.Result{
+		BootDir:       "/state/boot/x/current",
+		Provider:      boot.ProviderOpenCode,
+		Scope:         &scope,
+		ProjectDirArg: []string{boot.ProjectDirPlaceholder},
+	}
+	argv, err := boot.HarnessArgv(result)
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	if !slices.Equal(argv, []string{scope}) {
+		t.Fatalf("HarnessArgv = %v; want just the scope", argv)
+	}
+}
+
+// TestHarnessArgv_OpenCodeWithNoScopeGrantsNothing mirrors Codex: a null
+// scope is no argument, never an empty one.
+func TestHarnessArgv_OpenCodeWithNoScopeGrantsNothing(t *testing.T) {
+	result := boot.Result{
+		BootDir:       "/state/boot/x/current",
+		Provider:      boot.ProviderOpenCode,
+		ProjectDirArg: []string{boot.ProjectDirPlaceholder},
+	}
+	argv, err := boot.HarnessArgv(result)
+	if err != nil {
+		t.Fatalf("HarnessArgv: %v", err)
+	}
+	if len(argv) != 0 {
+		t.Fatalf("HarnessArgv = %v; want no arguments for a scopeless opencode boot", argv)
 	}
 }

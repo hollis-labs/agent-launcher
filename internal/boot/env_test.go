@@ -206,6 +206,19 @@ func TestResolveHome_FallsBackToThisMachinesDefault(t *testing.T) {
 	}
 }
 
+// TestResolveHome_OpenCodeFallsBackToItsConfigDir: an OpenCode boot repoints
+// OPENCODE_CONFIG_DIR, and its default is the global config directory.
+func TestResolveHome_OpenCodeFallsBackToItsConfigDir(t *testing.T) {
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	got, err := boot.ResolveHome("OPENCODE_CONFIG_DIR")
+	if err != nil {
+		t.Fatalf("ResolveHome: %v", err)
+	}
+	if !strings.HasSuffix(got, "/.config/opencode") {
+		t.Fatalf("ResolveHome = %q; want a path ending in /.config/opencode", got)
+	}
+}
+
 // TestResolveHome_EmptyKeyResolvesNothing: Claude's case, and it must not
 // invent a home for a provider that redirects none.
 func TestResolveHome_EmptyKeyResolvesNothing(t *testing.T) {
