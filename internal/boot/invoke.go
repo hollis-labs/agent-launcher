@@ -11,14 +11,16 @@ import (
 )
 
 // The providers Tachyon knows how to launch. They are the values Cairn's
-// own --json report puts in provider, and the only two bootdir.LayoutFor
-// renders a directory for. A third is a third case in [HarnessArgv] and a
-// third entry in internal/launch's harnessBinary map — not a new code path.
+// own --json report puts in provider, and the ones bootdir.LayoutFor renders
+// a directory for. Each is a case in [HarnessArgv] and an entry in
+// internal/launch's harnessBinary map — not a code path of its own.
 const (
 	// ProviderClaude is Claude Code.
 	ProviderClaude = "claude"
 	// ProviderCodex is the Codex CLI.
 	ProviderCodex = "codex"
+	// ProviderOpenCode is the OpenCode CLI.
+	ProviderOpenCode = "opencode"
 )
 
 // ProjectDirPlaceholder is the token Cairn's --json report leaves standing
@@ -231,6 +233,16 @@ func (r Result) ProjectDirArgv() []string {
 // out of a non-interactive probe recipe into this argv turns every Codex
 // launch into an immediate usage error — see
 // TestHarnessArgv_CodexNeverEmitsTheExecOnlyFlag.
+//
+// # OpenCode: the scope as its project, and nothing else
+//
+// OpenCode reads the boot directory as its config directory because
+// OPENCODE_CONFIG_DIR points there ([Environment]), and its settings and MCP
+// servers would live in that directory's opencode.json. So, like Codex, what
+// the command line carries is the scope, and this is [Result.ProjectDirArgv].
+// Cairn reports the interactive `opencode [project]` positional as
+// "{{.ProjectDir}}"; `--dir` belongs to `opencode run` and must not be copied
+// here from a non-interactive recipe.
 func HarnessArgv(result Result) ([]string, error) {
 	switch result.Provider {
 	case ProviderClaude:
@@ -239,7 +251,7 @@ func HarnessArgv(result Result) ([]string, error) {
 			settingsPath = *result.SettingsPath
 		}
 		return []string{"--settings", settingsPath}, nil
-	case ProviderCodex:
+	case ProviderCodex, ProviderOpenCode:
 		return result.ProjectDirArgv(), nil
 	default:
 		return nil, fmt.Errorf("boot: no harness argv known for provider %q", result.Provider)

@@ -102,8 +102,9 @@ import (
 // run by Tachyon at all, but by a login shell that has already sourced the
 // operator's profile, so the name is what a person would type.
 var harnessBinary = map[string]string{
-	boot.ProviderClaude: "claude",
-	boot.ProviderCodex:  "codex",
+	boot.ProviderClaude:   "claude",
+	boot.ProviderCodex:    "codex",
+	boot.ProviderOpenCode: "opencode",
 }
 
 // Service is bound to the frontend as a Wails service: the palette's

@@ -297,3 +297,43 @@ func TestPrepareHomeResources_RefusesWithNoSourceHome(t *testing.T) {
 		t.Fatal("PrepareHomeResources proceeded with no source home")
 	}
 }
+
+// TestPrepareHomeResources_OpenCodeResolvesAndLinksNothing: an OpenCode boot
+// repoints OPENCODE_CONFIG_DIR, so its home key must resolve (homeDefaults),
+// but it names no home resources, since auth lives in ~/.local/share/opencode.
+// The launch path resolves the home and then links nothing into the boot dir.
+func TestPrepareHomeResources_OpenCodeResolvesAndLinksNothing(t *testing.T) {
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	bootDir := t.TempDir()
+	scope := t.TempDir()
+	result := boot.Result{
+		BootDir:       bootDir,
+		Provider:      boot.ProviderOpenCode,
+		Scope:         &scope,
+		CwdPreference: "project_dir",
+		ProjectDirArg: []string{boot.ProjectDirPlaceholder},
+		EnvAmendments: []string{"OPENCODE_CONFIG_DIR=" + boot.BootDirPlaceholder},
+	}
+	key, err := boot.HomeRedirectKey(result)
+	if err != nil || key != "OPENCODE_CONFIG_DIR" {
+		t.Fatalf("HomeRedirectKey = %q, %v; want OPENCODE_CONFIG_DIR", key, err)
+	}
+	home, err := boot.ResolveHome(key)
+	if err != nil {
+		t.Fatalf("ResolveHome(%q): %v", key, err)
+	}
+	prepared, err := boot.PrepareHomeResources(result, home)
+	if err != nil {
+		t.Fatalf("PrepareHomeResources: %v", err)
+	}
+	if len(prepared) != 0 {
+		t.Fatalf("PrepareHomeResources = %v; want nothing linked for OpenCode", prepared)
+	}
+	entries, err := os.ReadDir(bootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the boot directory gained %d entries; want none", len(entries))
+	}
+}

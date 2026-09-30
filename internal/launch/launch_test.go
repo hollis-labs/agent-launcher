@@ -109,12 +109,12 @@ const projectDirNilScopeFixture = `{
 }`
 
 // unknownProviderFixture reports a provider this package's harnessBinary
-// map has no entry for. "opencode" is deliberately real: cairn knows the
-// name and refuses to render a layout for it, so this is the shape a
-// launcher would actually meet rather than an invented word.
+// map has no entry for. "antigravity" is deliberately real: a harness the
+// runtimes know and Cairn does not yet render, so this is the shape a
+// launcher could actually meet rather than an invented word.
 const unknownProviderFixture = `{
-  "boot_dir": "/state/boot/opencode-thing/current",
-  "provider": "opencode",
+  "boot_dir": "/state/boot/antigravity-thing/current",
+  "provider": "antigravity",
   "scope": null,
   "settings_path": null,
   "cwd_preference": "boot_dir",
@@ -235,7 +235,7 @@ func TestLaunch_UnrecognizedCwdPreferenceIsAnError(t *testing.T) {
 func TestLaunch_UnknownProviderIsAnError(t *testing.T) {
 	fr := &fakeRunner{stdout: []byte(unknownProviderFixture)}
 	rec := &spawnRecorder{}
-	comp := bareComposition("opencode-thing", "/bundle/root", t.TempDir())
+	comp := bareComposition("antigravity-thing", "/bundle/root", t.TempDir())
 
 	err := runComposition(context.Background(), comp, fr.run, rec.spawn)
 	if err == nil {
@@ -1069,6 +1069,56 @@ func TestLaunch_CodexSpawnsFromTheBootDirWithItsHomeAndScope(t *testing.T) {
 	for _, tok := range rec.argv {
 		if tok == "--settings" {
 			t.Errorf("codex argv carries claude's --settings flag: %v", rec.argv)
+		}
+	}
+}
+
+// openCodeReport is the shape a real `cairn boot <target> --provider opencode
+// --scope <dir> --json` printed on 2026-09-30 (cairn CW-20260930-0142), with
+// its paths replaced.
+func openCodeReport(bootDir, scope string) string {
+	return `{
+  "boot_dir": ` + quoteJSON(bootDir) + `,
+  "provider": "opencode",
+  "scope": ` + quoteJSON(scope) + `,
+  "settings_path": null,
+  "cwd_preference": "project_dir",
+  "project_dir_arg": ["{{.ProjectDir}}"],
+  "env_amendments": ["OPENCODE_CONFIG_DIR={{.BootDir}}"],
+  "home_resource_paths": null
+}`
+}
+
+// TestLaunch_OpenCodeSpawnsInTheScopeWithItsConfigDir is the OpenCode launch
+// shape: cwd is the scope (cwd_preference project_dir), OPENCODE_CONFIG_DIR
+// points at the boot directory Cairn planted, and the scope is passed as the
+// interactive positional project. Like Codex, it is the same runComposition,
+// with every difference read from the report.
+func TestLaunch_OpenCodeSpawnsInTheScopeWithItsConfigDir(t *testing.T) {
+	bootDir := "/state/boot/opencode-coder/current"
+	scope := "/Users/chrispian/dev/projects/agent-setup"
+	fr := &fakeRunner{stdout: []byte(openCodeReport(bootDir, scope))}
+	rec := &spawnRecorder{}
+	comp := bareComposition("opencode-coder", "/bundle/root", t.TempDir())
+
+	if err := runComposition(context.Background(), comp, fr.run, rec.spawn); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if !rec.called {
+		t.Fatal("spawn was not called")
+	}
+	if rec.cwd != scope {
+		t.Errorf("cwd = %q; want the scope %q", rec.cwd, scope)
+	}
+	if want := []string{"opencode", scope}; !reflect.DeepEqual(rec.argv, want) {
+		t.Errorf("argv = %v; want %v", rec.argv, want)
+	}
+	if want := []string{"OPENCODE_CONFIG_DIR=" + bootDir}; !reflect.DeepEqual(rec.env, want) {
+		t.Errorf("env = %v; want %v", rec.env, want)
+	}
+	for _, tok := range rec.argv {
+		if tok == "--dir" || tok == "--settings" {
+			t.Errorf("interactive opencode argv carries %s: %v", tok, rec.argv)
 		}
 	}
 }
