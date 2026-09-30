@@ -1,159 +1,90 @@
-# Tachyon
+# Agent Launcher
 
-Tachyon is the **user-facing surface of the agent system**. It does two things:
-it edits the system's files, and it starts a session from them.
+A macOS menu-bar app that edits an agent-setup bundle and launches CLI coding
+agents (Claude Code, Codex) from it, through Cairn, into a terminal.
 
-## The seam
+> **Pre-release.** This project is unreleased, not deployed, and has no outside consumers. It's being built in the open: the code, the docs, and this README describe what exists today, not a pitch for what's planned. Interfaces and behavior change without notice, and there are no compatibility guarantees yet.
 
-Three responsibilities, three owners. The whole design rests on this.
-
-| | Owner | What |
-|---|---|---|
-| **Content** | `agent-setup` (the bundle) | profiles, templates, prompts, skills, hooks |
-| **Materialization** | Cairn | resolve a profile, assemble a directory, print its path, exit |
-| **Authoring + launching** | **Tachyon** | edit the bundle; own the launch config; compose; build argv; spawn a terminal |
-
-Three things make a launch, and each has exactly one owner:
-
-| | Owner | Reaches Cairn as |
-|---|---|---|
-| **agent profile** — what this is | the bundle | `cairn boot <target>` |
-| **launch profile** — how it runs | Tachyon, `~/.config/tachyon/launch/` | `--with <path>` |
-| **project** — where it works | Tachyon's project list | `--scope <path>` |
-
-A launch profile is an ordinary Cairn part — not a format of Tachyon's own —
-so what Tachyon saves is exactly what Cairn consumes, and `cairn show --with`
-can preview it. It carries the provider, because no profile in the bundle
-declares one: a runtime is a launch's to choose, not an agent's to carry.
-
-This replaced **bindings**, which were a saved (profile, parts, skills, scope)
-tuple living *in the bundle*, in a format Cairn could not read. agent-setup
-retired all 34 and Cairn dropped bindings and `--save-as` on 2026-09-10.
-
-Cairn does not own content — it is a materializer pointed at a bundle, and
-`agent-setup` is one bundle it can be pointed at. Tachyon is not a Cairn
-front-end; it is an editor of the agent system that invokes Cairn to render it.
-
-**Tether is not in this picture.** Tether launches session agents; Tachyon is
-100% user-facing. A human presses a hotkey and a terminal opens. That is why
-Tachyon has no session model, no daemon dependency and no headless path.
+Agent Launcher is an early-stage convenience tool. It was built for one
+person's workflow on one machine, and it is likely to change substantially or
+be folded into another app. Expect rough edges.
 
 ## What it is
 
-A single Wails v3 + React desktop app: two window classes over one shared Go
-core, behind one tray icon.
+A single desktop app built with [Wails v3](https://v3.wails.io/) (Go core,
+React frontend), living behind one tray icon. It has two windows:
 
-- **The palette** — hotkey-summoned, frameless, always-on-top, dismissed on
-  Escape and on blur. Pick an agent; launch; vanish. The launch profile and
-  the project sit above the list, so Enter on a row is already a complete
-  launch and the compose modal is for one-off additions on top. This is the
-  fast path, and it is what Tachyon is for.
-- **The manager** — an ordinary window that does *not* dismiss on blur. A file
-  tree over the bundle and a text editor. This is the CRUD.
+- **The palette** — summoned by a global hotkey, frameless and always on top.
+  Pick an agent profile, a launch profile and a project, press Enter, and a
+  terminal opens with the agent running. It disappears on Escape or when it
+  loses focus.
+- **The manager** — an ordinary window with a file tree and text editor over
+  the bundle: create and edit profiles, prompts, skills and other bundle
+  files, author launch profiles, manage project folders, preview which skills
+  a launch would carry, and clean up old boot directories.
 
-The postures are mutually exclusive — an editor that vanishes when you click
-away is unusable, and a palette that lingers is not a palette — so the split is
-structural, not cosmetic. The palette can open the manager; the manager never
-becomes the palette.
+A launch is made of three things:
 
-### If the hotkey stops working
+| | What it answers | Where it lives |
+|---|---|---|
+| **Agent profile** | what the agent is | the bundle |
+| **Launch profile** | how it runs, including which harness (Claude Code or Codex) | `~/.config/tachyon/launch/` |
+| **Project** | which folder it works in | the app's project list |
 
-macOS does not report a global-hotkey conflict. Another application can already
-own the combination, and Tachyon's registration still succeeds — the key simply
-never arrives. So the hotkey is configurable at runtime, and there are two ways
-to change it:
+The launcher hands those to `cairn boot`. Cairn builds a boot directory and
+reports on it as JSON. The launcher then opens an iTerm2 session running the
+harness from that directory. Claude Code launches always pass
+`--settings <bootdir>/.claude/settings.json`. Codex launches run with
+`CODEX_HOME` set to the boot directory and the project granted through
+`--add-dir`.
 
-- **The tray icon** — right-click it and choose *Settings…*. This is the
-  intended route.
-- **By hand** — edit `~/.config/tachyon/shell.json` and
-  change the top-level `"hotkey"` key (Wails accelerator spelling, e.g.
-  `"Ctrl+Option+Space"`), then restart Tachyon. A value that cannot be bound is
-  replaced with the default at startup rather than leaving you with no hotkey,
-  so a typo here costs a restart and nothing else.
+### What it does not do
 
-The second route matters because Tachyon has no Dock icon and no application
-menu — if the hotkey is dead *and* the status item is not drawing, the file is
-the way back in.
+- It never runs `cairn install` or modifies your live `~/.claude`.
+- It never runs git. It writes files into the bundle, and you commit them.
+- It holds no session state: there is no session list, attach or resume.
+- It does not validate bundle content beyond shape and existence.
 
-Nothing is a sidecar. The Go core is bound into the app directly, so there is
-no subprocess on the interactive path at all — a subprocess per interaction
-was the measured cause of browsing lag, and removing it is the point. The
-launch path is a different thing and it does spawn: **Cairn**, once per
-launch, and then **the terminal itself** (iTerm2 via AppleScript).
-
-## What it does not do
-
-Stated so nobody designs around a promise that is not there.
-
-- **It never runs `cairn install`.** That rewrites the live `~/.claude` of the
-  machine it runs on; it is human-executed, permanently. (`cairn install
-  --check` is safe and may be surfaced read-only.)
-- **It never runs git.** It writes files into a git repo; the user commits.
-- **It never stages a second copy of bundle content.** The active bundle is
-  the source for editing, preview and launch; saving an edit needs no Apply or
-  install step.
-- **It holds no session state.** No list, no attach, no resume.
-- **It never writes to a Cairn store.** The catalog is the bundle.
-- **It does not validate content.** Shape and existence only.
-
-## Status
-
-The manager, composition, preview and launch paths work. Tachyon reads the
-active bundle, including ordinary profiles in both `profiles/` and
-`profiles/parts/`, shows it as a tree, and edits it as text byte-for-byte. The
-manager can create bundle artifacts, author launch profiles, inspect Cairn's
-effective skills preview, manage project scopes and run the guarded
-old-boot-directory sweep on demand. A saved edit is immediately available to the next Cairn
-preview or launch because both read the same active bundle directly.
-
-Summoning the palette launches an agent profile through Cairn into an iTerm2
-session, for either harness Cairn renders a boot directory for, with whatever
-the compose modal added on top. Claude Code launches carry
-`--settings <bootdir>/.claude/settings.json`, permanently. Codex launches run
-from the boot directory with `CODEX_HOME` pointing at it and the real project
-granted through `--add-dir`, and the operator-owned resources Cairn names
-(`auth.json`, `hooks.json`, `hooks`) are linked in from the operator's own
-Codex home before the terminal opens — links, never copies, so Tachyon never
-becomes a second owner of live credentials, and a missing one refuses the
-launch instead of opening a session whose hooks quietly do not run. Codex's
-first launch of a boot directory asks to trust its hooks; that prompt is the
-operator's, and nothing here bypasses it.
-
-Which harness a launch materializes into is declared in the launch profile and
-resolved through Cairn's own cascade — never inferred from a name, and never
-passed as a flag, because a flag would be a second source for a value the file
-already carries. A launch with no launch profile has no provider and Cairn
-refuses it; that is the intended shape, and Tachyon seeds a default so a first
-run has one.
-
-Composition drafts survive ordinary palette dismissal until they are launched
-or explicitly discarded.
-
-Boot directories carry one path segment per axis, grouped by project so the
-tree answers "what is running on cairn" rather than "every scope engineer has
-ever been booted at":
+## How it fits
 
 ```
-~/.local/state/tachyon/boot/cairn-8cbb5cc873/engineer/codex
-                            <project>        <profile> <launch profile>
+agent-setup bundle  ->  Cairn  ->  boot directory  ->  Agent Launcher opens the agent
+  (content: profiles,    (resolves a profile,          (iTerm2 session running
+   prompts, skills,       assembles a directory,        Claude Code or Codex
+   hooks)                 prints its path)              from that directory)
 ```
 
-The path is stable for a given composition, so a harness accrues one
-`~/.claude.json` trust entry per composition rather than one per launch. A
-relaunch moves the old directory aside — never deletes it, because a live
-session holds its cwd by inode and a rename preserves that — and the guarded
-startup/manual sweep removes only eligible `.prev-*` directories that are no
-longer in use.
+- **The bundle** holds the content: a directory of profiles, prompts, skills
+  and hooks in the layout Cairn reads (the author's is called `agent-setup`).
+  The manager edits it in place.
+- **[Cairn](https://github.com/hollis-labs/cairn)** materializes a profile
+  from the bundle into a boot directory.
+- **Agent Launcher** is where a person edits that content and starts an agent
+  from it.
 
-The Swift menubar app, the Go sidecar behind it, its bundled catalog corpus,
-the frozen `list`/`describe`/`launch` contract and the `go-agent-launch`
-dependency are all gone.
+## Requirements
 
-## Run and build
+- macOS 12 or newer. The tray, hotkey and terminal launch are macOS-only.
+- Go 1.26.3 or newer.
+- Node.js and npm, needed only to rebuild the frontend or package the app.
+- Xcode command-line tools, needed for cgo and for code signing.
+- [Cairn](https://github.com/hollis-labs/cairn) on your `PATH`.
+- [iTerm2](https://iterm2.com/), used to open launched sessions.
+- An agent bundle. The default is `~/dev/projects/agent-setup`, and you can
+  choose another from the manager.
+- The harness CLI you launch (`claude` or `codex`) on your `PATH`.
 
-Requirements are Go 1.26.3 or newer, Node.js/npm, the macOS command-line
-developer tools and Cairn on `PATH`. iTerm2 is required when a selection is
-actually launched. For source development:
+## Build and run
+
+The built frontend (`frontend/dist`) is committed, so the Go build works
+without npm:
+
+```sh
+go build ./...
+go test ./...
+```
+
+For development, run the app straight from source:
 
 ```sh
 npm --prefix frontend ci
@@ -161,120 +92,83 @@ npm --prefix frontend run build
 go run .
 ```
 
-`go run .` is useful for development, but it is not a packaged-app or macOS
-privacy test: a terminal-launched process can inherit the terminal's
-Accessibility grant.
+A process started from a terminal inherits that terminal's macOS privacy
+grants. That makes `go run .` a development run, not a test of the packaged
+app.
 
-Build the production macOS application with the repository's single packaging
-command:
+### Packaging a macOS app
 
 ```sh
 ./scripts/build-macos.sh
 ```
 
-It rebuilds the frontend, verifies that every hashed asset referenced by
-`frontend/dist/index.html` exists and is tracked, builds the Wails production
-binary, installs the checked-in icon and `Info.plist`, and signs the result at
-the stable path `build/bin/Tachyon.app`. A changed frontend must therefore have
-its newly generated `frontend/dist` files committed before it can be packaged.
-The ordinary Go build remains npm-independent because `frontend/dist` is
-committed:
+This rebuilds the frontend, checks that every hashed asset in
+`frontend/dist/index.html` exists and is tracked, builds the production
+binary, and signs the result at `build/bin/Tachyon.app`. The bundle and
+binary still carry the app's former name (see Naming below).
 
-```sh
-go test ./...
-go build ./...
-npm --prefix frontend test
-```
+On its first run the script creates a self-signed, local-only code-signing
+identity in `~/Library/Application Support/Tachyon/signing/`, stored in a
+dedicated keychain that it adds to your user keychain search list. It does not
+need an Apple developer account or admin access. The same identity is reused
+on later builds, so macOS keeps recognizing the app and its Accessibility
+permission survives a rebuild. The app is signed for this machine only. It is
+not notarized and should not be distributed to other Macs.
 
-### Local signing and Accessibility identity
-
-The first packaged build creates a Tachyon-only self-signed code-signing
-identity in `~/Library/Application Support/Tachyon/signing/`. It uses a
-dedicated keychain, records user-scoped code-signing trust, and restricts the
-private key's noninteractive access to Apple's signing tools. No administrator
-access, Apple developer account or repository-stored private key is required.
-Signer creation is staged and published atomically; later builds repair a
-missing trust record for that same certificate without replacing it. The
-packaging command is serialized across worktrees so concurrent builds cannot
-race the signing state or final app replacement.
-
-The resulting designated requirement pins both
-`com.hollislabs.tachyon` and the persistent certificate. The build prints that
-requirement and refuses to replace an existing app if it changes across a
-rebuild. Back up the signing directory: deleting or partially recreating it
-rotates Tachyon's identity and requires granting Accessibility again. The app
-is locally signed for this machine; it is not notarized or suitable for
-distribution to another Mac.
-
-Launch the package through LaunchServices, not by executing its inner binary:
+Launch the packaged app through LaunchServices:
 
 ```sh
 open build/bin/Tachyon.app
 ```
 
-With the package quit, the local tray acceptance check launches that exact app
-through LaunchServices, verifies its separate Accessibility label, captures its
-menu-bar pixels, toggles the palette through AXPress, exercises the real right-
-click menu, exits through that exact menu's Quit action, and fails if the mark
-is in macOS's visually blank overflow region:
+Grant it Accessibility once, in **System Settings → Privacy & Security →
+Accessibility**, so the global hotkey works.
 
-```sh
-./scripts/check-macos-tray.sh
-```
+`./scripts/check-macos-tray.sh` is an optional acceptance check for the tray
+icon. It needs Accessibility and Screen Recording access for the terminal
+that runs it.
 
-The check needs Accessibility and Screen Recording access for the invoking
-terminal. Use its cold-position mode to temporarily remove both the legacy and
-current saved positions, verify the first-run fallback, and restore the exact
-values (or absence) when the check exits:
+## Usage
 
-```sh
-./scripts/check-macos-tray.sh --cold-position
-```
+1. Launch the app. A `⌁` mark appears in the menu bar. The app has no Dock
+   icon.
+2. Press the global hotkey, `Ctrl+Option+Space` by default, or left-click the
+   tray mark to open the palette.
+3. Choose a launch profile and a project, pick an agent profile, and press
+   Enter. An iTerm2 window opens with the agent running.
+4. Right-click the tray mark for **Open Manager**, **Settings…** and
+   **Quit**. In the manager you choose the bundle and edit its files, and you
+   manage launch profiles and projects.
 
-On macOS Tachyon owns one narrow AppKit status-item bridge because Wails v3
-does not expose its native status item or setters for the platform-only
-properties. The bridge gives the item a stable public `NSStatusItem.autosaveName`
-and gives its button the public Accessibility label “Tachyon,” independently of
-the visible `⌁` title. A one-time migration moves a persistent position from
-Wails' old automatic `Item-0` name. AppKit exposes no public initial-position
-setter, so a non-persistent registered fallback keeps a truly new item out of
-the overflow measured on the target notched menu bar. A migrated or
-Command-dragged named position has ordinary user-default precedence.
+A default launch profile is created on first run, so the first launch works.
 
-If a previously saved custom position is itself hidden, quit Tachyon, remove
-only that placement, and relaunch; the first-run default will be registered
-again:
+### If the hotkey stops working
 
-```sh
-defaults delete com.hollislabs.tachyon 'NSStatusItem Preferred Position com.hollislabs.tachyon.main-status-item'
-open build/bin/Tachyon.app
-```
+macOS does not report hotkey conflicts. If another app already owns the
+combination, the key never arrives. Change the hotkey from the tray menu under
+**Settings…**, or edit the `"hotkey"` key in `~/.config/tachyon/shell.json`
+(Wails accelerator spelling, e.g. `"Ctrl+Option+Space"`) and restart the app.
+If the value can't be bound, the app falls back to the default.
 
-For the required macOS verification, enable `Tachyon.app` once in **System
-Settings → Privacy & Security → Accessibility**, launch it with the command
-above, and observe all of the following:
+## Files it keeps
 
-1. The configured global hotkey summons the palette. An existing installation
-   uses a valid value saved in Settings or `shell.json`; a fresh preferences
-   file, or a missing or invalid saved value, falls back to
-   `Ctrl+Option+Space`.
-2. The Tachyon tray mark renders as `⌁`; VoiceOver announces it as “Tachyon”;
-   left-click toggles the palette; and right-click shows Open Manager, Settings
-   and Quit.
-3. After quitting, rerun `./scripts/build-macos.sh` and launch the same app path
-   with `open`; Accessibility remains enabled without adding the app again, and
-   the hotkey and tray still work.
+| Path | Contents |
+|---|---|
+| `~/.config/tachyon/` | your choices: bundle root, projects, shell preferences, launch profiles |
+| `~/.local/state/tachyon/boot/` | boot directories, which the app regenerates, grouped as `<project>/<profile>/<launch profile>` |
 
-Those observations must be made by a person against the packaged application.
-Successful signing, `go run .`, or the pixel-level tray preflight does not prove
-Accessibility persistence or real hotkey/menu interaction.
+Both honor `XDG_CONFIG_HOME` and `XDG_STATE_HOME`. When you relaunch a
+composition, its old boot directory is moved aside rather than deleted,
+because a running session may still be using it. The sweep in the manager
+removes old directories that are no longer in use.
 
-### Where the authority is
+## Naming
 
-**Tesseract, then code, then Chrispian.** A document in this repo describes the
-moment it was written and is not binding.
+This project was formerly called Tachyon. The Tachyon name now belongs to a
+separate Hollis Labs control-plane app. The Go module path, the packaged
+`Tachyon.app`, its bundle identifier and the `tachyon` config directories
+still use the old name.
 
-- Decisions: `tachyon_vnext_target_architecture` in Tesseract
-  (`user/chrispian/memory/decisions`). Fetch it by key rather than searching
-  for it.
-- Work and its state: `CW-20260518-0061` in Torque.
+## License
+
+MIT. See [LICENSE](LICENSE).

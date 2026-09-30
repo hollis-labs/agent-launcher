@@ -1,3 +1,10 @@
 /tachyon
 /build/
 frontend/node_modules/
+
+# Agent-facing and machine-local files, kept on disk but not tracked
+AGENTS.md
+CLAUDE.md
+.claude/
+.agentrc/
+*.cerberus.yaml
